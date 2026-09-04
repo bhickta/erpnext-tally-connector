@@ -9,6 +9,8 @@ app_color = "grey"
 app_email = "laxmantandon@gmail.com"
 app_license = "MIT"
 
+required_apps = ["erpnext"]
+
 # Includes in <head>
 # ------------------
 
@@ -56,8 +58,9 @@ app_license = "MIT"
 # Installation
 # ------------
 
-# before_install = "express_tally.install.before_install"
-# after_install = "express_tally.install.after_install"
+after_install = "express_tally.install.after_install"
+before_migrate = "express_tally.install.before_migrate"
+after_migrate = "express_tally.install.after_migrate"
 
 # Desk Notifications
 # ------------------

@@ -9,7 +9,7 @@ from express_tally import __version__ as version
 setup(
 	name='express_tally',
 	version=version,
-	description='This application sync data between tally and erpnext using frappe rest api',
+	description='Reusable bidirectional ERPNext and Tally integration framework',
 	author='Laxman Tandon',
 	author_email='laxmantandon@gmail.com',
 	packages=find_packages(),

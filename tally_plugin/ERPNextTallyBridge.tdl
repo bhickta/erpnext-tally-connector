@@ -1,0 +1,31 @@
+;; ERPNext Bridge trigger for TallyPrime 7.x
+;; The local Python bridge keeps credentials out of TDL and performs the sync.
+
+[#Menu: Gateway of Tally]
+    Add : Key Item : Before : @@locQuit : ERPNext Sync : E : Call : ERPNext Tally Sync
+
+[Function: ERPNext Tally Sync]
+    010 : HTTP Request : "http://127.0.0.1:8765/sync" : GET : JSONEX : ASCII : ERPNext Tally Sync Request : ERPNext Tally Sync Complete
+    020 : Return
+
+[Function: ERPNext Tally Sync Complete]
+    010 : Msg Box : "ERPNext Sync" : "Sync request completed. Open Tally Bridge logs for the detailed result."
+    020 : Return
+
+;; TallyPrime requires a valid request-report description even for a GET.
+;; The report body is ignored for GET; its Accept header requests JSON.
+[Report: ERPNext Tally Sync Request]
+    Form          : ERPNext Tally Sync Request Form
+    Export Header : "Accept: application/json"
+
+[Form: ERPNext Tally Sync Request Form]
+    Part : ERPNext Tally Sync Request Part
+
+[Part: ERPNext Tally Sync Request Part]
+    Line : ERPNext Tally Sync Request Line
+
+[Line: ERPNext Tally Sync Request Line]
+    Field : ERPNext Tally Sync Request Field
+
+[Field: ERPNext Tally Sync Request Field]
+    Set As : ""

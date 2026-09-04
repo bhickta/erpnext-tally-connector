@@ -3,6 +3,7 @@
 from .contracts import FlowContext, FlowDirection, InboundFlow, IntegrationFlow, OutboundFlow
 from .engine import FlowEngine
 from .registry import FlowRegistry, get_registry
+from .sync_log import OutboundSyncLog, SourceSpec
 
 __all__ = [
 	"FlowContext",
@@ -12,5 +13,7 @@ __all__ = [
 	"InboundFlow",
 	"IntegrationFlow",
 	"OutboundFlow",
+	"OutboundSyncLog",
+	"SourceSpec",
 	"get_registry",
 ]

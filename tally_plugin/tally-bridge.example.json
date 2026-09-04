@@ -1,0 +1,19 @@
+{
+  "frappe_url": "https://erp.example.com",
+  "api_key": "replace-with-api-key",
+  "api_secret": "replace-with-api-secret",
+  "erpnext_company": "ERP Company",
+  "target_id": "main-office-tally",
+  "tally_company": "Tally Company",
+  "tally_url": "http://127.0.0.1:9000",
+  "poll_interval_seconds": 60,
+  "batch_size": 20,
+  "listen_host": "127.0.0.1",
+  "listen_port": 8765,
+  "request_timeout_seconds": 30,
+  "from_date": null,
+  "to_date": null,
+  "flow_name": "my_app.my_tally_flow",
+  "voucher_date_override": null,
+  "agent_profiles": []
+}

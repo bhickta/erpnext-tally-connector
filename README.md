@@ -1,12 +1,14 @@
-<div align="left">
+# ERPNext-Tally Connector
 
-<h1>Tally To ERPNext Data Migration Tool</h1>
+A reusable base for bidirectional ERPNext ↔ Tally integrations. It provides
+flow discovery and dispatch, stable HTTP contracts, shared synchronization
+state, a manual ERPNext exporter, and a standalone Windows bridge with pluggable
+Tally-side execution profiles. Company apps contribute only their selection,
+mapping, eligibility, and document-creation policy.
 
-This tool helps migration of data from Tally Prime (Masters and transactions) to ERPNext using frappe rest apis.
-- Migrate Masters (Account, Customer, Suppliers, Contact and Address)
-- Migrate Transactions (Purchase Invoice, Sales Invoice, Payment Entry, Journal Entry)
-
-</div>
+The original Tally-to-ERPNext migration endpoints remain available for masters
+(Account, Customer, Supplier, Contact, Address) and transactions (Purchase
+Invoice, Sales Invoice, Payment Entry, Journal Entry).
 
 ## Prerequisite
 * TDL Files https://github.com/laxmantandon/tally_migration_tdl.git
@@ -21,7 +23,7 @@ Once you've [set up a Frappe site](https://frappeframework.com/docs/v14/user/en/
 1. Download the app using the Bench CLI.
 
     ```bash
-    bench get-app --branch [branch name] https://github.com/laxmantandon/express_tally.git
+    bench get-app https://github.com/bhickta/erpnext-tally-connector.git
     ```
 
 2. Install the app on your site.
@@ -68,7 +70,7 @@ Once you've [set up a Frappe site](https://frappeframework.com/docs/v14/user/en/
 - Sync Alternate (Multiple Units)
 - Sync Price Lists
 
-## Bidirectional flow framework (first draft)
+## Bidirectional flow framework
 
 The `express_tally.framework` package provides a versioned API and extension
 contract for company apps. Existing migration endpoints remain available and
@@ -85,9 +87,9 @@ tally_integration_flows = [
 
 ERPNext-to-Tally flows extend `OutboundFlow` and implement `pull` plus
 `acknowledge`. Tally-to-ERPNext flows extend `InboundFlow` and implement
-`receive`. Each flow owns its business mapping, eligibility rules, permissions,
-and durable synchronization state; the framework owns discovery, validation,
-batch limits, direction checks, and the HTTP envelope.
+`receive`. Each flow owns its business mapping, eligibility rules, and
+permissions. The connector owns discovery, validation, batch limits, direction
+checks, the HTTP envelope, and reusable `OutboundSyncLog` state handling.
 
 Version 1 endpoints are:
 
@@ -99,10 +101,16 @@ POST /api/method/express_tally.framework.api.receive
 GET  /api/method/express_tally.framework.api.get_status
 ```
 
-An outbound flow must return documents in a contract understood by its local
-Tally agent profile. This first draft keeps payload mapping in the contributing
-app so different companies can implement different accounting policies without
-forking the connector.
+An outbound flow returns documents in a contract understood by its local Tally
+agent profile. Payload mapping stays in the contributing app so different
+companies can implement different accounting policies without forking the
+connector. The bundled `inventory_sales_voucher_v1` profile supports SRV's
+current Sales Order/Delivery Note contract.
+
+Apps using standard ERPNext selling documents can subclass
+`SalesDocumentsToTallyFlow` directly; only the stable key, title, and roles are
+required. A custom `SalesDocumentMapper` subclass can override policy without
+reimplementing synchronization state or Tally gateway work.
 
 See [Tally flow framework](docs/flow-framework.md) for the extension contract,
 agent profiles, state requirements, and an implementation example.
