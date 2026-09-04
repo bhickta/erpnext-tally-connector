@@ -130,9 +130,14 @@
                 <label>To date<input name="to_date" type="date" /></label>
               </div>
               <fieldset><legend>Automatic directions</legend><label class="check"><input name="auto_outbound" type="checkbox" /> ERPNext → Tally</label><label class="check"><input name="auto_inbound" type="checkbox" /> Tally → ERPNext</label></fieldset>
+			  <label class="check"><input name="submit_inbound_documents" type="checkbox" /> Submit imported Tally vouchers automatically</label>
+			  <p class="field-note">Leave this off while testing. Inbound invoices, payments, journals, and stock entries will be created as drafts for review.</p>
+			  <label class="check"><input name="update_stock_from_inbound" type="checkbox" /> Update ERPNext stock from imported Tally invoices</label>
+			  <p class="field-note">Enable only when Tally is the inventory source of truth for these invoices.</p>
               <label class="check"><input name="open_browser_on_start" type="checkbox" /> Open Control Centre when the connector starts</label>
+			  <label class="check"><input name="start_with_windows" type="checkbox" /> Start the connector automatically with Windows</label>
             </div>
-            <div class="form-actions"><button type="button" class="button secondary" id="settings-test">Save and test</button><button type="submit" class="button primary">Save settings</button></div>
+			<div class="form-actions"><button type="button" class="button danger" id="reset-checkpoints">Reset inbound checkpoint</button><button type="button" class="button secondary" id="settings-test">Save and test</button><button type="submit" class="button primary">Save settings</button></div>
           </form>
         </section>
       </main>

@@ -65,12 +65,22 @@ def main(argv=None):
 			config = controller.config()
 			if getattr(args, "no_poll", False) and config.auto_sync_enabled:
 				controller.set_auto_sync(False)
-			server = BridgeHTTPServer((config.listen_host, config.listen_port), controller)
 			url = f"http://{config.listen_host}:{config.listen_port}/"
+			try:
+				server = BridgeHTTPServer((config.listen_host, config.listen_port), controller)
+			except OSError as exc:
+				controller.shutdown()
+				if exc.errno in {98, 10048}:
+					webbrowser.open(url)
+					return 0
+				raise
 			logging.info("Tally Control Centre listening on %s", url)
 			if config.open_browser_on_start and not getattr(args, "no_browser", False):
 				threading.Timer(0.6, webbrowser.open, args=(url,)).start()
-			server.serve_forever()
+			try:
+				server.serve_forever()
+			finally:
+				server.server_close()
 			return 0
 
 		config = BridgeConfig.load(args.config)
@@ -93,7 +103,9 @@ def main(argv=None):
 			print(json.dumps(frappe.request(args.method, args.path, json.loads(args.data)), indent=2))
 			return 0
 	except (BridgeRequestError, OSError, ValueError, json.JSONDecodeError) as exc:
-		print(f"error: {exc}", file=sys.stderr)
+		logging.error("%s", exc)
+		if sys.stderr:
+			print(f"error: {exc}", file=sys.stderr)
 		return 2
 
 

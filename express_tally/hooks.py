@@ -11,6 +11,11 @@ app_license = "MIT"
 
 required_apps = ["erpnext"]
 
+tally_integration_flows = [
+	"express_tally.integrations.tally_inbound_flows.TallyMastersToERPNextFlow",
+	"express_tally.integrations.tally_inbound_flows.TallyVouchersToERPNextFlow",
+]
+
 # Includes in <head>
 # ------------------
 

@@ -2,7 +2,7 @@ import json
 import os
 import tempfile
 import threading
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import date
 from pathlib import Path
 
@@ -33,7 +33,9 @@ class BridgeConfig:
 	auto_sync_enabled: bool = False
 	auto_sync_directions: tuple[str, ...] = ("erpnext_to_tally", "tally_to_erpnext")
 	open_browser_on_start: bool = True
+	start_with_windows: bool = True
 	flow_options: dict | None = None
+	runtime_directory: str = field(default="", repr=False, compare=False)
 
 	@classmethod
 	def load(cls, path, validate=True):
@@ -70,11 +72,13 @@ class BridgeConfig:
 
 	def public_dict(self):
 		values = asdict(self)
+		values.pop("runtime_directory", None)
 		values["api_secret"] = SECRET_MASK if self.api_secret else ""
 		return values
 
 	def storage_dict(self):
 		values = asdict(self)
+		values.pop("runtime_directory", None)
 		for key in ("agent_profiles", "enabled_flows", "auto_sync_directions"):
 			values[key] = list(values[key])
 		return values
@@ -134,6 +138,7 @@ class ConfigStore:
 	EDITABLE_FIELDS = frozenset(field.name for field in fields(BridgeConfig)) - {
 		"listen_host",
 		"listen_port",
+		"runtime_directory",
 	}
 
 	def __init__(self, path):

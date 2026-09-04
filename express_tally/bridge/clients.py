@@ -173,6 +173,9 @@ class TallyClient:
 	def get_current_company(self, request_xml):
 		return parse_current_company(self.post_xml(request_xml))
 
+	def export_collection(self, request_xml):
+		return self.post_xml(request_xml)
+
 	def get_logical_function(self, request_xml):
 		return parse_logical_result(self.post_xml(request_xml))
 

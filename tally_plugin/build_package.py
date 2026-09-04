@@ -21,7 +21,6 @@ def build(executable, output_file=OUTPUT_FILE):
 		archive.write(executable, "ERPNextTallyControlCentre.exe")
 		for filename in (
 			"README.md",
-			"ERPNextTallyBridge.tdl",
 			"start-control-centre.cmd",
 			"tally-bridge.example.json",
 		):

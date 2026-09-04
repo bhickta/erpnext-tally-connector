@@ -31,10 +31,6 @@ and the log are stored in `%LOCALAPPDATA%\Express Tally Control Centre`. Startin
 the executable again opens the same Control Centre; only one instance can bind
 the local port.
 
-Optional: load `ERPNextTallyBridge.tdl` through **F1 → TDL & Add-On → Manage
-Local TDL**. The Tally Gateway menu can still invoke the compatibility `/sync`
-endpoint.
-
 ## Both sync directions
 
 The Control Centre operates all registered directions:

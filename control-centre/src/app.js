@@ -111,8 +111,15 @@ async function loadConfig() {
     form.elements[name].value = state.config[name] ?? "";
   });
   form.elements.open_browser_on_start.checked = Boolean(state.config.open_browser_on_start);
+	form.elements.start_with_windows.checked = Boolean(state.config.start_with_windows);
   form.elements.auto_outbound.checked = (state.config.auto_sync_directions || []).includes("erpnext_to_tally");
   form.elements.auto_inbound.checked = (state.config.auto_sync_directions || []).includes("tally_to_erpnext");
+	form.elements.submit_inbound_documents.checked = Boolean(
+	  state.config.flow_options?.["express_tally.standard_vouchers_from_tally"]?.submit_documents,
+	);
+	form.elements.update_stock_from_inbound.checked = Boolean(
+	  state.config.flow_options?.["express_tally.standard_vouchers_from_tally"]?.update_stock,
+	);
 }
 
 function settingsPayload() {
@@ -137,7 +144,16 @@ function settingsPayload() {
       ...(form.elements.auto_outbound.checked ? ["erpnext_to_tally"] : []),
       ...(form.elements.auto_inbound.checked ? ["tally_to_erpnext"] : []),
     ],
+	flow_options: {
+	  ...(state.config.flow_options || {}),
+	  "express_tally.standard_vouchers_from_tally": {
+		...(state.config.flow_options?.["express_tally.standard_vouchers_from_tally"] || {}),
+		submit_documents: form.elements.submit_inbound_documents.checked,
+		update_stock: form.elements.update_stock_from_inbound.checked,
+	  },
+	},
     open_browser_on_start: form.elements.open_browser_on_start.checked,
+	start_with_windows: form.elements.start_with_windows.checked,
   };
 }
 
@@ -207,6 +223,13 @@ function wireEvents() {
     try { await saveSettings(); } catch (error) { toast(error.message, true); }
   });
   $("#refresh-flows").addEventListener("click", () => loadFlows(true));
+	$("#reset-checkpoints").addEventListener("click", async () => {
+	  if (!window.confirm("Reset the inbound checkpoint for this target? Tally records will be offered to ERPNext again; existing sync logs still prevent duplicate versions.")) return;
+	  try {
+		await api("/api/v1/checkpoints/reset", { method: "POST", body: "{}" });
+		toast("Inbound checkpoint reset.");
+	  } catch (error) { toast(error.message, true); }
+	});
   $("#save-flows").addEventListener("click", async () => {
     try { await saveFlows(); } catch (error) { toast(error.message, true); }
   });

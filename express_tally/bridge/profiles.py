@@ -28,6 +28,9 @@ class AgentProfile:
 		"""
 		raise NotImplementedError
 
+	def acknowledge_collected(self, config, records, results):
+		"""Advance any local extraction checkpoint after ERPNext accepts records."""
+
 	def supports_direction(self, direction):
 		if direction == "erpnext_to_tally":
 			return type(self).deliver is not AgentProfile.deliver
@@ -77,8 +80,10 @@ class InventorySalesVoucherProfile(AgentProfile):
 
 class AgentProfileRegistry:
 	def __init__(self, entries=()):
+		from .inbound_profiles import TallyMastersProfile, TallyVouchersProfile
+
 		self._profiles = {}
-		for entry in (InventorySalesVoucherProfile, *entries):
+		for entry in (InventorySalesVoucherProfile, TallyMastersProfile, TallyVouchersProfile, *entries):
 			self.register(entry)
 
 	def register(self, entry):

@@ -10,6 +10,7 @@ from unittest import TestCase
 from unittest.mock import Mock
 
 from express_tally.bridge.clients import FrappeClient
+from express_tally.bridge.collection_gateway import build_collection_export, parse_collection_export
 from express_tally.bridge.config import SECRET_MASK, BridgeConfig, ConfigStore
 from express_tally.bridge.controller import ControlCentre
 from express_tally.bridge.json_gateway import (
@@ -18,6 +19,7 @@ from express_tally.bridge.json_gateway import (
 	parse_import_response,
 )
 from express_tally.bridge.http_server import BridgeHTTPServer
+from express_tally.bridge.inbound_profiles import TallyVouchersProfile, normalize_master, normalize_voucher
 from express_tally.bridge.profiles import AgentProfile, AgentProfileRegistry
 from express_tally.bridge.service import SyncService, SyncSummary
 from express_tally.bridge.xml_gateway import ImportResult as XMLImportResult
@@ -186,6 +188,95 @@ class TestTallyXMLVoucherGateway(TestCase):
 		self.assertEqual(voucher.attrib["ACTION"], "Alter")
 		self.assertEqual(voucher.attrib["TAGNAME"], "MASTER ID")
 		self.assertEqual(voucher.attrib["TAGVALUE"], "42")
+
+
+class TestTallyCollectionGateway(TestCase):
+	def test_built_in_registry_supports_both_sync_directions(self):
+		profiles = {profile["key"]: profile for profile in AgentProfileRegistry().metadata()}
+
+		self.assertIn("erpnext_to_tally", profiles["inventory_sales_voucher_v1"]["directions"])
+		self.assertIn("tally_to_erpnext", profiles["tally_masters_v1"]["directions"])
+		self.assertIn("tally_to_erpnext", profiles["tally_vouchers_v1"]["directions"])
+
+	def test_inline_collection_request_needs_no_installed_tdl(self):
+		request = build_collection_export(
+			"Tally Company",
+			"ETControlCentreUnits",
+			"Unit",
+			("Name", "DecimalPlaces", "AlterID"),
+		)
+		root = ET.fromstring(request)
+
+		self.assertEqual(root.findtext(".//SVCURRENTCOMPANY"), "Tally Company")
+		self.assertEqual(root.findtext(".//COLLECTION/TYPE"), "Unit")
+		self.assertEqual(
+			[element.text for element in root.findall(".//NATIVEMETHOD")],
+			["Name", "DecimalPlaces", "AlterID"],
+		)
+
+	def test_collection_response_preserves_nested_voucher_entries(self):
+		response = """
+		<ENVELOPE><BODY><DATA><COLLECTION>
+		<VOUCHER NAME="SAL-1"><MASTERID>42</MASTERID><ALTERID>9</ALTERID>
+		<VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><DATE>20260904</DATE>
+		<PARTYLEDGERNAME>Customer One</PARTYLEDGERNAME>
+		<ALLLEDGERENTRIES.LIST><LEDGERNAME>Customer One</LEDGERNAME><AMOUNT>-118</AMOUNT></ALLLEDGERENTRIES.LIST>
+		<ALLINVENTORYENTRIES.LIST><STOCKITEMNAME>Item One</STOCKITEMNAME><BILLEDQTY>2 Nos</BILLEDQTY><RATE>50/Nos</RATE><AMOUNT>100</AMOUNT></ALLINVENTORYENTRIES.LIST>
+		</VOUCHER></COLLECTION></DATA></BODY></ENVELOPE>
+		"""
+		raw = parse_collection_export(response, ("VOUCHER",))[0]
+		voucher = normalize_voucher(raw)
+
+		self.assertEqual(voucher["voucher_number"], "SAL-1")
+		self.assertEqual(voucher["date"], "2026-09-04")
+		self.assertEqual(voucher["ledger_entries"][0]["amount"], -118)
+		self.assertEqual(voucher["inventory_entries"][0]["item"], "Item One")
+
+	def test_master_classification_uses_tally_group_ancestry(self):
+		groups = {
+			"retail customers": {"name": "Retail Customers", "parent": "Sundry Debtors"},
+			"sundry debtors": {"name": "Sundry Debtors", "parent": "Primary"},
+		}
+		record = normalize_master(
+			"ledger",
+			{
+				"_name": "Customer One",
+				"parent": "Retail Customers",
+				"alter_id": "7",
+				"guid": "guid-1",
+			},
+			groups,
+		)
+
+		self.assertEqual(record["kind"], "customer")
+		self.assertEqual(record["primary_group"], "Sundry Debtors")
+
+	def test_inbound_checkpoint_advances_only_after_erpnext_success(self):
+		response = """
+		<ENVELOPE><BODY><DATA><COLLECTION><VOUCHER NAME="SAL-1">
+		<MASTERID>42</MASTERID><ALTERID>9</ALTERID><GUID>guid-1</GUID>
+		<VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><DATE>20260904</DATE>
+		</VOUCHER></COLLECTION></DATA></BODY></ENVELOPE>
+		"""
+		tally = Mock()
+		tally.export_collection.return_value = response
+		with tempfile.TemporaryDirectory() as directory:
+			config = BridgeConfig(
+				frappe_url="https://erp.example.com",
+				api_key="key",
+				api_secret="secret",
+				erpnext_company="ERP Company",
+				target_id="target-1",
+				tally_company="Tally Company",
+				flow_name="test.inbound",
+				runtime_directory=directory,
+			)
+			profile = TallyVouchersProfile()
+			records = profile.collect(config, tally, 20)
+			self.assertEqual(len(records), 1)
+
+			profile.acknowledge_collected(config, records, [{"status": "Success"}])
+			self.assertEqual(profile.collect(config, tally, 20), [])
 
 
 class TestSyncService(TestCase):

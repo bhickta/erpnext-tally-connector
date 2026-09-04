@@ -14,11 +14,21 @@
   "from_date": null,
   "to_date": null,
   "flow_name": "my_app.my_tally_flow",
-	"enabled_flows": ["my_app.my_tally_flow"],
+	"enabled_flows": [
+	  "my_app.my_tally_flow",
+	  "express_tally.standard_masters_from_tally",
+	  "express_tally.standard_vouchers_from_tally"
+	],
 	"auto_sync_enabled": false,
 	"auto_sync_directions": ["erpnext_to_tally", "tally_to_erpnext"],
 	"open_browser_on_start": true,
-	"flow_options": {},
+	"start_with_windows": true,
+	"flow_options": {
+	  "express_tally.standard_vouchers_from_tally": {
+		"submit_documents": false,
+		"update_stock": false
+	  }
+	},
   "voucher_date_override": null,
   "agent_profiles": []
 }

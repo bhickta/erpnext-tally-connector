@@ -124,6 +124,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 				self._json(503, {"ok": False, "error": str(exc)})
 			return
 		if path.path == "/sync":
+			if self.headers.get("Sec-Fetch-Site") == "cross-site" or not self._same_origin():
+				self._json(403, {"status": 0, "message": "Cross-origin control requests are not allowed"})
+				return
 			query = urllib.parse.parse_qs(path.query)
 			try:
 				limit = int(query.get("limit", [0])[0]) or None
@@ -175,6 +178,9 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 				return
 			if path == "/api/v1/test-connections":
 				self._json(200, self.server.controller.health())
+				return
+			if path == "/api/v1/checkpoints/reset":
+				self._json(200, {"ok": True, **self.server.controller.reset_inbound_checkpoints()})
 				return
 			self._json(404, {"error": "Not found"})
 		except Exception as exc:

@@ -157,6 +157,10 @@ class SyncService:
 			return summary
 
 		results = response.get("results", [])
+		try:
+			profile.acknowledge_collected(self.config, records, results)
+		except Exception as exc:
+			summary.error = f"Records reached ERPNext but the local checkpoint failed: {exc}"
 		for result in results:
 			status = str(result.get("status", result.get("message", ""))).lower()
 			if status in {"success", "already exists", "skipped"}:

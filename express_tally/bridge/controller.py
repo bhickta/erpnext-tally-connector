@@ -1,9 +1,11 @@
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from collections import deque
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,14 +44,40 @@ class ControlCentre:
 		self._scheduler_thread.start()
 
 	def config(self):
-		return self.config_store.load(validate=False)
+		return replace(
+			self.config_store.load(validate=False),
+			runtime_directory=str(self.config_store.path.parent),
+		)
 
 	def update_config(self, changes):
 		config = self.config_store.update(changes)
+		self._configure_windows_startup(config.start_with_windows)
 		with self._state_lock:
 			self._next_auto_sync = None
 		self._wake_scheduler.set()
 		return config.public_dict()
+
+	def _configure_windows_startup(self, enabled):
+		if os.name != "nt" or not getattr(sys, "frozen", False):
+			return
+		app_data = os.getenv("APPDATA")
+		if not app_data:
+			return
+		startup = Path(app_data) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+		launcher = startup / "Express Tally Control Centre.cmd"
+		if not enabled:
+			try:
+				launcher.unlink()
+			except FileNotFoundError:
+				pass
+			return
+		startup.mkdir(parents=True, exist_ok=True)
+		executable = str(Path(sys.executable).resolve())
+		config_path = str(self.config_store.path)
+		launcher.write_text(
+			f'@echo off\r\nstart "" "{executable}" --config "{config_path}"\r\n',
+			encoding="utf-8",
+		)
 
 	def set_auto_sync(self, enabled):
 		config = self.config_store.set_auto_sync(enabled)
@@ -57,6 +85,15 @@ class ControlCentre:
 			self._next_auto_sync = None
 		self._wake_scheduler.set()
 		return {"enabled": config.auto_sync_enabled}
+
+	def reset_inbound_checkpoints(self):
+		from .inbound_profiles import CheckpointStore
+
+		config = self.config()
+		config.validate()
+		target = f"{config.target_id}:{config.tally_company}"
+		removed = CheckpointStore(config.runtime_directory).reset(target)
+		return {"reset": removed, "target": target}
 
 	def make_service(self, require_flows=True):
 		config = self.config()

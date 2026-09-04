@@ -10,11 +10,11 @@ The original Tally-to-ERPNext migration endpoints remain available for masters
 (Account, Customer, Supplier, Contact, Address) and transactions (Purchase
 Invoice, Sales Invoice, Payment Entry, Journal Entry).
 
-## Prerequisite
-* TDL Files https://github.com/laxmantandon/tally_migration_tdl.git
-* Tally Prime
-* ERPNext Active Site
-* india_compliance app is required https://github.com/resilient-tech/india-compliance
+## Prerequisites
+
+- TallyPrime with its HTTP server enabled
+- An active ERPNext site
+- The India Compliance app when Indian tax fields are synchronized
 
 ## Installation
 
@@ -33,36 +33,12 @@ Once you've [set up a Frappe site](https://frappeframework.com/docs/v14/user/en/
     ```
 
 
-## Steps to Configure
-* Configure TDL Files in tally
-  - follow instruction on this repo https://github.com/laxmantandon/tally_migration_tdl.git
+## Configure synchronization
 
-* Generate Authentication Keys
-  Create a user with appropriate permission and generate api key and secret
-  ![image](https://github.com/laxmantandon/express_tally/assets/24727535/73558d52-d260-4a38-b0a1-8c2ef307a50b)
-
-* Setting up Auth Keys in Tally Prime
-  - From Gateway of Tally -> F1 -> Addon Features -> F6
-  Set *Enable ERPNext Integration* to Yes and specify auth keys and other parameters
-  
-  ![image](https://github.com/laxmantandon/express_tally/assets/24727535/5039845f-6a04-49e2-b45c-4a55933630f7)
-
-* Migrating Data from Tally to ERPNext
-  - From Gateway of Tally go to Display -> ERPNext -> Migrate to ERPNext
-  
-  ![image](https://github.com/laxmantandon/express_tally/assets/24727535/d7029c93-1a44-450b-b2f1-ef3655eb28ce)
-
-* Observe result in ERPNext
-
-![image](https://github.com/laxmantandon/express_tally/assets/24727535/f1b46186-89d0-42fb-9136-1df767adbdb7)
-
-## Errors and Exception Handling 
-* From Gateway of Tally goto -> ERPNext -> Migration -> Exception (select object type )
-  - You can check for exceptions here and make necessary changes in data
-  - Check Error Log List in ERPNext for errors
-  - Alternatively you check tally event log for more info
-    
-![image](https://github.com/laxmantandon/express_tally/assets/24727535/726a60b0-7291-4a82-a453-af3eb1d8a2fc)
+Generate an API key and secret for an ERPNext user with the **Tally Sync User**
+role. Run the Windows Control Centre on the Tally computer, enter the connection
+and company settings, select the registered flows, and use manual or automatic
+sync. No TDL or TCP file is installed in Tally.
 
 
 ## Planned Features

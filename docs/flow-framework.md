@@ -49,12 +49,31 @@ from express_tally.framework import FlowContext, InboundFlow
 
 
 class TallyReceiptToPaymentEntry(InboundFlow):
-    key = "my_company.tally_receipt_to_payment_entry"
+	key = "my_company.tally_receipt_to_payment_entry"
+	agent_profile = "my_tally_receipts_v1"
     allowed_roles = frozenset({"Accounts Manager", "Tally Sync User"})
 
-    def receive(self, context: FlowContext, records):
-        return [apply_receipt(context, record) for record in records]
+	def receive(self, context: FlowContext, records):
+		return [apply_receipt(context, record) for record in records]
 ```
+
+The matching Windows `AgentProfile` implements `collect(config, tally_client,
+limit, options)` and may implement `acknowledge_collected(...)` to persist its
+checkpoint only after ERPNext accepts the batch. The connector includes
+`tally_masters_v1` and `tally_vouchers_v1`, which query Tally through inline XML
+collections and therefore do not require an installed TDL or TCP file.
+
+Two standard inbound flows are registered by the connector:
+
+```text
+express_tally.standard_masters_from_tally
+express_tally.standard_vouchers_from_tally
+```
+
+Master sync should be enabled before voucher sync. Voucher imports are drafts by
+default. Set `submit_documents: true` in that flow's options only after mappings
+have been verified in a test company; the Control Centre exposes this as a
+settings checkbox.
 
 Flow keys are stable API identifiers. Do not rename one after a client has been
 configured without providing an alias or migration path.
@@ -100,13 +119,18 @@ unknown profile before writing anything to Tally. This prevents a purchase,
 payroll, or company-specific payload from accidentally being interpreted as a
 Sales voucher.
 
-The first implemented profile is `inventory_sales_voucher_v1`. It expects the
+The outbound inventory-sales profile is `inventory_sales_voucher_v1`. It expects the
 version-1 sales-document payload and maps those records to inventory-aware Tally
 Sales vouchers. SRV uses this profile for its current Sales Order and Delivery
 Note flow.
 
 Additional profiles should be introduced for other voucher types instead of
 adding conditional company logic to the existing profile.
+
+The built-in inbound profiles are `tally_masters_v1` and `tally_vouchers_v1`.
+They fetch standard Tally masters and vouchers over the localhost XML gateway,
+normalize the response, and use per-target Alter ID checkpoints stored by the
+Control Centre. ERPNext performs the final validation and document mapping.
 
 ## State and idempotency
 
