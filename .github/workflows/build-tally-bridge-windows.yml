@@ -8,6 +8,7 @@ on:
     paths:
       - ".github/workflows/build-tally-bridge-windows.yml"
       - "express_tally/bridge/**"
+      - "control-centre/**"
       - "tally_plugin/**"
 
 permissions:
@@ -32,6 +33,16 @@ jobs:
           cache: pip
           cache-dependency-path: tally_plugin/requirements-build.txt
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: control-centre/package-lock.json
+
+      - name: Build Control Centre UI
+        run: npm --prefix control-centre ci && npm --prefix control-centre run build
+
       - name: Run bridge tests
         run: python -m unittest express_tally.tests.test_bridge
 
@@ -42,10 +53,10 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ERPNext-Tally-Bridge-Windows-x64
+          name: ERPNext-Tally-Control-Centre-Windows-x64
           path: |
-            dist/ERPNext-Tally-Bridge-Windows-x64.zip
-            dist/ERPNext-Tally-Bridge-Windows-x64.zip.sha256
+            dist/ERPNext-Tally-Control-Centre-Windows-x64.zip
+            dist/ERPNext-Tally-Control-Centre-Windows-x64.zip.sha256
           if-no-files-found: error
 
       - name: Update rolling GitHub prerelease
@@ -61,5 +72,5 @@ jobs:
           fail_on_unmatched_files: true
           overwrite_files: true
           files: |
-            dist/ERPNext-Tally-Bridge-Windows-x64.zip
-            dist/ERPNext-Tally-Bridge-Windows-x64.zip.sha256
+            dist/ERPNext-Tally-Control-Centre-Windows-x64.zip
+            dist/ERPNext-Tally-Control-Centre-Windows-x64.zip.sha256

@@ -1,0 +1,14 @@
+{
+  "name": "@express-tally/control-centre",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local Windows control centre for ERPNext and TallyPrime synchronization",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node --check src/app.js && node scripts/build.mjs --check"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

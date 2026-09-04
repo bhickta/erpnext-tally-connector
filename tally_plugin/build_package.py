@@ -8,7 +8,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 PLUGIN_DIR = Path(__file__).resolve().parent
 APP_DIR = PLUGIN_DIR.parent
 OUTPUT_DIR = APP_DIR / "dist"
-OUTPUT_FILE = OUTPUT_DIR / "ERPNext-Tally-Bridge-Windows-x64.zip"
+OUTPUT_FILE = OUTPUT_DIR / "ERPNext-Tally-Control-Centre-Windows-x64.zip"
 
 
 def build(executable, output_file=OUTPUT_FILE):
@@ -18,11 +18,11 @@ def build(executable, output_file=OUTPUT_FILE):
 		raise FileNotFoundError(f"Windows executable not found: {executable}")
 	output_file.parent.mkdir(parents=True, exist_ok=True)
 	with ZipFile(output_file, "w", ZIP_DEFLATED) as archive:
-		archive.write(executable, "ERPNextTallyBridge.exe")
+		archive.write(executable, "ERPNextTallyControlCentre.exe")
 		for filename in (
 			"README.md",
 			"ERPNextTallyBridge.tdl",
-			"start-bridge.cmd",
+			"start-control-centre.cmd",
 			"tally-bridge.example.json",
 		):
 			archive.write(PLUGIN_DIR / filename, filename)
@@ -30,7 +30,7 @@ def build(executable, output_file=OUTPUT_FILE):
 
 
 def _parser():
-	parser = argparse.ArgumentParser(description="Build the ERPNext-Tally Bridge ZIP")
+	parser = argparse.ArgumentParser(description="Build the ERPNext-Tally Control Centre ZIP")
 	parser.add_argument("--output", default=str(OUTPUT_FILE), help="Output ZIP path")
 	parser.add_argument("--executable", required=True, help="Standalone Windows executable")
 	return parser

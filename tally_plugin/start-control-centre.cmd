@@ -9,9 +9,4 @@ if not exist "ERPNextTallyControlCentre.exe" (
   exit /b 2
 )
 
-"ERPNextTallyControlCentre.exe" --config "tally-bridge.json" serve
-set EXIT_CODE=%ERRORLEVEL%
-echo.
-echo Tally Bridge stopped with exit code %EXIT_CODE%.
-pause
-exit /b %EXIT_CODE%
+start "" "ERPNextTallyControlCentre.exe"

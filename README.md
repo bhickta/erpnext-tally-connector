@@ -2,8 +2,8 @@
 
 A reusable base for bidirectional ERPNext ↔ Tally integrations. It provides
 flow discovery and dispatch, stable HTTP contracts, shared synchronization
-state, a manual ERPNext exporter, and a standalone Windows bridge with pluggable
-Tally-side execution profiles. Company apps contribute only their selection,
+state, a manual ERPNext exporter, and a standalone Windows Control Centre with
+manual and automatic synchronization plus pluggable Tally-side execution profiles. Company apps contribute only their selection,
 mapping, eligibility, and document-creation policy.
 
 The original Tally-to-ERPNext migration endpoints remain available for masters
@@ -106,6 +106,27 @@ agent profile. Payload mapping stays in the contributing app so different
 companies can implement different accounting policies without forking the
 connector. The bundled `inventory_sales_voucher_v1` profile supports SRV's
 current Sales Order/Delivery Note contract.
+
+## Windows Control Centre
+
+End users run a single `ERPNextTallyControlCentre.exe`; Python and Node.js are
+not required on the Tally computer. The executable opens a local browser UI for
+ERPNext/Tally health, credentials, company and target settings, registered flow
+selection, manual sync in either direction, automatic schedules, and recent run
+history. Settings and logs are stored under the user's Local AppData directory.
+
+The UI source is the private npm package in `control-centre/`. It has no runtime
+dependencies and is built into the Python executable by the Windows release
+workflow:
+
+```bash
+npm --prefix control-centre ci
+npm --prefix control-centre run build
+```
+
+An ERPNext-to-Tally flow needs a delivery profile. A Tally-to-ERPNext flow needs
+an extraction profile implementing `AgentProfile.collect`; the Control Centre
+only enables flows whose matching local profile is installed.
 
 Apps using standard ERPNext selling documents can subclass
 `SalesDocumentsToTallyFlow` directly; only the stable key, title, and roles are

@@ -14,6 +14,11 @@
   "from_date": null,
   "to_date": null,
   "flow_name": "my_app.my_tally_flow",
+	"enabled_flows": ["my_app.my_tally_flow"],
+	"auto_sync_enabled": false,
+	"auto_sync_directions": ["erpnext_to_tally", "tally_to_erpnext"],
+	"open_browser_on_start": true,
+	"flow_options": {},
   "voucher_date_override": null,
   "agent_profiles": []
 }

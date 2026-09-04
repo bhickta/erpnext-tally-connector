@@ -10,7 +10,7 @@ from .xml_gateway import build_voucher_import, function_request
 
 
 class AgentProfile:
-	"""Translate one mapped flow record into calls to Tally's local gateway."""
+	"""Translate records between a registered ERPNext flow and local Tally."""
 
 	key = ""
 
@@ -19,6 +19,21 @@ class AgentProfile:
 
 	def deliver(self, document, config, tally_client):
 		raise NotImplementedError
+
+	def collect(self, config, tally_client, limit, options=None):
+		"""Extract records for a Tally-to-ERPNext flow.
+
+		Inbound profiles override this method because the extraction contract and
+		checkpoint are specific to the registered ERPNext flow.
+		"""
+		raise NotImplementedError
+
+	def supports_direction(self, direction):
+		if direction == "erpnext_to_tally":
+			return type(self).deliver is not AgentProfile.deliver
+		if direction == "tally_to_erpnext":
+			return type(self).collect is not AgentProfile.collect
+		return False
 
 
 class InventorySalesVoucherProfile(AgentProfile):
@@ -82,6 +97,19 @@ class AgentProfileRegistry:
 			return self._profiles[key]
 		except KeyError as exc:
 			raise ValueError(f"Unsupported Tally agent profile: {key}") from exc
+
+	def metadata(self):
+		return [
+			{
+				"key": key,
+				"directions": [
+					direction
+					for direction in ("erpnext_to_tally", "tally_to_erpnext")
+					if profile.supports_direction(direction)
+				],
+			}
+			for key, profile in sorted(self._profiles.items())
+		]
 
 	def _instantiate(self, entry):
 		if isinstance(entry, str):

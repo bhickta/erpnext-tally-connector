@@ -18,6 +18,8 @@ class SyncSummary:
 	failed: int = 0
 	skipped: int = 0
 	error: str = ""
+	flow: str = ""
+	direction: str = ""
 
 	def to_dict(self):
 		return asdict(self)
@@ -41,25 +43,65 @@ class SyncService:
 			"company_matches": company_matches,
 		}
 
+	def discover_flows(self):
+		response = self.frappe.get_flows()
+		flows = response.get("flows", response if isinstance(response, list) else [])
+		selected = set(self.config.selected_flows)
+		for flow in flows:
+			flow["selected"] = flow.get("key") in selected
+			profile_key = flow.get("agent_profile")
+			try:
+				profile = self.profiles.get(profile_key)
+				flow["available"] = profile.supports_direction(flow.get("direction"))
+			except ValueError:
+				flow["available"] = False
+			flow["unavailable_reason"] = (
+				"" if flow["available"] else f"Agent profile '{profile_key or '(not set)'}' is not installed"
+			)
+		return flows
+
 	def sync_once(self, limit=None):
+		"""Backward-compatible single outbound flow entry point."""
+		flow = self.config.flow_name or next(iter(self.config.selected_flows), "")
+		return self.sync_flow(flow, "erpnext_to_tally", limit=limit)
+
+	def sync_flow(self, flow, direction, agent_profile=None, limit=None):
 		if not self._lock.acquire(blocking=False):
-			return SyncSummary(skipped=1, error="A sync is already running")
+			return SyncSummary(
+				skipped=1,
+				error="A sync is already running",
+				flow=flow,
+				direction=direction,
+			)
 		try:
-			return self._sync_once(limit)
+			if direction == "erpnext_to_tally":
+				return self._sync_outbound(flow, limit)
+			if direction == "tally_to_erpnext":
+				return self._sync_inbound(flow, agent_profile, limit)
+			return SyncSummary(error=f"Unsupported sync direction: {direction}", flow=flow, direction=direction)
 		finally:
 			self._lock.release()
 
-	def _sync_once(self, limit=None):
-		summary = SyncSummary()
+	def _check_environment(self, summary):
 		try:
 			health = self.health()
-			if not health["company_matches"]:
-				summary.error = (
-					f"Tally company mismatch: loaded '{health['loaded_tally_company']}', "
-					f"configured '{health['configured_tally_company']}'"
-				)
-				return summary
-			batch = self.frappe.get_unsynced_documents(self.config, limit=limit)
+		except Exception as exc:
+			summary.error = str(exc)
+			return False
+		if not health["company_matches"]:
+			summary.error = (
+				f"Tally company mismatch: loaded '{health['loaded_tally_company']}', "
+				f"configured '{health['configured_tally_company']}'"
+			)
+			return False
+		return True
+
+	def _sync_outbound(self, flow, limit=None):
+		summary = SyncSummary(flow=flow, direction="erpnext_to_tally")
+		if not self._check_environment(summary):
+			return summary
+		try:
+			batch = self.frappe.get_unsynced_documents(self.config, limit=limit, flow=flow)
 		except Exception as exc:
 			summary.error = str(exc)
 			return summary
@@ -67,11 +109,13 @@ class SyncService:
 		if batch.get("schema_version") != 1:
 			summary.error = f"Unsupported Frappe sync schema: {batch.get('schema_version')}"
 			return summary
-		if batch.get("flow") != self.config.flow_name:
+		if batch.get("flow") != flow:
 			summary.error = f"Unexpected Tally flow: {batch.get('flow')}"
 			return summary
 		try:
 			profile = self.profiles.get(batch.get("agent_profile"))
+			if not profile.supports_direction("erpnext_to_tally"):
+				raise ValueError(f"Agent profile {profile.key} does not support ERPNext to Tally")
 			profile.validate_environment(self.tally)
 		except Exception as exc:
 			summary.error = str(exc)
@@ -82,10 +126,9 @@ class SyncService:
 		for document in documents:
 			result = self._sync_document(document, profile)
 			try:
-				self.frappe.acknowledge(self.config, [result])
+				self.frappe.acknowledge(self.config, [result], flow=flow)
 			except BridgeRequestError as exc:
-				# The deterministic Tally GUID and voucher number make the next retry
-				# identifiable even when the acknowledgement response was lost.
+				# A deterministic Tally GUID makes a retry identifiable after a lost acknowledgement.
 				LOGGER.error("Could not acknowledge %s: %s", document["name"], exc)
 				summary.failed += 1
 				summary.error = str(exc)
@@ -94,6 +137,34 @@ class SyncService:
 				summary.succeeded += 1
 			else:
 				summary.failed += 1
+		return summary
+
+	def _sync_inbound(self, flow, agent_profile, limit=None):
+		summary = SyncSummary(flow=flow, direction="tally_to_erpnext")
+		if not self._check_environment(summary):
+			return summary
+		try:
+			profile = self.profiles.get(agent_profile)
+			if not profile.supports_direction("tally_to_erpnext"):
+				raise ValueError(f"Agent profile {profile.key} does not support Tally to ERPNext")
+			profile.validate_environment(self.tally)
+			options = (self.config.flow_options or {}).get(flow, {})
+			records = list(profile.collect(self.config, self.tally, limit or self.config.batch_size, options))
+			summary.fetched = len(records)
+			response = self.frappe.receive(self.config, flow, records)
+		except Exception as exc:
+			summary.error = str(exc)
+			return summary
+
+		results = response.get("results", [])
+		for result in results:
+			status = str(result.get("status", result.get("message", ""))).lower()
+			if status in {"success", "already exists", "skipped"}:
+				summary.succeeded += 1
+			else:
+				summary.failed += 1
+		if len(results) < len(records):
+			summary.failed += len(records) - len(results)
 		return summary
 
 	def _sync_document(self, document, profile):

@@ -1,19 +1,24 @@
 import json
+import tempfile
 import threading
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import replace
+from pathlib import Path
 from unittest import TestCase
 from unittest.mock import Mock
 
 from express_tally.bridge.clients import FrappeClient
-from express_tally.bridge.config import BridgeConfig
+from express_tally.bridge.config import SECRET_MASK, BridgeConfig, ConfigStore
+from express_tally.bridge.controller import ControlCentre
 from express_tally.bridge.json_gateway import (
 	build_master_imports,
 	build_voucher_import,
 	parse_import_response,
 )
 from express_tally.bridge.http_server import BridgeHTTPServer
+from express_tally.bridge.profiles import AgentProfile, AgentProfileRegistry
 from express_tally.bridge.service import SyncService, SyncSummary
 from express_tally.bridge.xml_gateway import ImportResult as XMLImportResult
 from express_tally.bridge.xml_gateway import build_voucher_import as build_xml_voucher_import
@@ -274,6 +279,32 @@ class TestSyncService(TestCase):
 		self.assertIn("Unsupported Tally agent profile", result.error)
 		tally_client.import_json.assert_not_called()
 
+	def test_inbound_profile_collects_and_sends_records_to_erpnext(self):
+		class ExampleInboundProfile(AgentProfile):
+			key = "example_inbound_v1"
+
+			def collect(self, config, tally_client, limit, options=None):
+				return [{"name": "TALLY-1", "voucher_type": options["voucher_type"]}]
+
+		frappe_client = Mock()
+		frappe_client.receive.return_value = {"results": [{"status": "Success"}]}
+		tally_client = Mock()
+		tally_client.get_current_company.return_value = "Tally Company"
+		config = replace(self.config, flow_options={"test.inbound": {"voucher_type": "Receipt"}})
+		profiles = AgentProfileRegistry([ExampleInboundProfile])
+
+		result = SyncService(config, frappe_client, tally_client, profiles).sync_flow(
+			"test.inbound", "tally_to_erpnext", "example_inbound_v1"
+		)
+
+		self.assertEqual(result.fetched, 1)
+		self.assertEqual(result.succeeded, 1)
+		frappe_client.receive.assert_called_once_with(
+			config,
+			"test.inbound",
+			[{"name": "TALLY-1", "voucher_type": "Receipt"}],
+		)
+
 
 class TestFrappeFlowClient(TestCase):
 	def setUp(self):
@@ -345,3 +376,58 @@ class TestBridgeHTTPServer(TestCase):
 			server.shutdown()
 			server.server_close()
 			server_thread.join(2)
+
+	def test_control_centre_serves_ui_and_masks_secret(self):
+		with tempfile.TemporaryDirectory() as directory:
+			config_path = Path(directory) / "tally-bridge.json"
+			ConfigStore(config_path).update(
+				{
+					"frappe_url": "https://erp.example.com",
+					"api_key": "key",
+					"api_secret": "secret",
+					"erpnext_company": "ERP Company",
+					"target_id": "target-1",
+					"tally_company": "Tally Company",
+					"enabled_flows": ["test.outbound"],
+				}
+			)
+			controller = ControlCentre(config_path)
+			web_root = Path(__file__).parents[1] / "bridge" / "web"
+			server = BridgeHTTPServer(("127.0.0.1", 0), controller, web_root=web_root)
+			server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+			server_thread.start()
+			base_url = f"http://127.0.0.1:{server.server_port}"
+			try:
+				with urllib.request.urlopen(f"{base_url}/", timeout=1) as response:
+					self.assertIn(b"Express Tally Control Centre", response.read())
+				with urllib.request.urlopen(f"{base_url}/api/v1/config", timeout=1) as response:
+					config = json.loads(response.read())
+				self.assertEqual(config["api_secret"], SECRET_MASK)
+			finally:
+				server.shutdown()
+				server.server_close()
+				server_thread.join(2)
+
+
+class TestConfigStore(TestCase):
+	def test_first_run_settings_can_be_saved_before_flow_selection(self):
+		with tempfile.TemporaryDirectory() as directory:
+			store = ConfigStore(Path(directory) / "tally-bridge.json")
+			self.assertEqual(store.load().frappe_url, "")
+
+			stored = store.update(
+				{
+					"frappe_url": "https://erp.example.com",
+					"api_key": "key",
+					"api_secret": "secret",
+					"erpnext_company": "ERP Company",
+					"target_id": "target-1",
+					"tally_company": "Tally Company",
+				}
+			)
+
+			self.assertEqual(stored.selected_flows, ())
+			self.assertEqual(stored.public_dict()["api_secret"], SECRET_MASK)
+			store.update({"api_secret": SECRET_MASK, "enabled_flows": ["test.outbound"]})
+			self.assertEqual(store.load().api_secret, "secret")
+			self.assertEqual(store.load().selected_flows, ("test.outbound",))

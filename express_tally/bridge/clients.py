@@ -50,7 +50,10 @@ class FrappeClient:
 			raise BridgeRequestError(f"Cannot reach Frappe: {exc}") from exc
 		return payload.get("message", payload)
 
-	def get_unsynced_documents(self, config, limit=None):
+	def get_flows(self):
+		return self.request("GET", "/api/method/express_tally.framework.api.get_flows")
+
+	def get_unsynced_documents(self, config, limit=None, flow=None):
 		params = {
 			"company": config.erpnext_company,
 			"target_id": config.target_id,
@@ -61,16 +64,19 @@ class FrappeClient:
 			params["from_date"] = config.from_date
 		if config.to_date:
 			params["to_date"] = config.to_date
-		params["flow"] = config.flow_name
+		params["flow"] = flow or config.flow_name
+		options = (config.flow_options or {}).get(params["flow"], {})
+		if options:
+			params["options"] = json.dumps(options)
 		return self.request(
 			"GET",
 			"/api/method/express_tally.framework.api.pull",
 			params,
 		)
 
-	def acknowledge(self, config, results):
+	def acknowledge(self, config, results, flow=None):
 		data = {
-			"flow": config.flow_name,
+			"flow": flow or config.flow_name,
 			"company": config.erpnext_company,
 			"target_id": config.target_id,
 			"tally_company": config.tally_company,
@@ -80,6 +86,34 @@ class FrappeClient:
 			"POST",
 			"/api/method/express_tally.framework.api.acknowledge",
 			data,
+		)
+
+	def receive(self, config, flow, records):
+		data = {
+			"flow": flow,
+			"company": config.erpnext_company,
+			"target_id": config.target_id,
+			"tally_company": config.tally_company,
+			"records": records,
+			"options": (config.flow_options or {}).get(flow, {}),
+		}
+		return self.request(
+			"POST",
+			"/api/method/express_tally.framework.api.receive",
+			data,
+		)
+
+	def get_flow_status(self, config, flow):
+		return self.request(
+			"GET",
+			"/api/method/express_tally.framework.api.get_status",
+			{
+				"flow": flow,
+				"company": config.erpnext_company,
+				"target_id": config.target_id,
+				"tally_company": config.tally_company,
+				"options": json.dumps((config.flow_options or {}).get(flow, {})),
+			},
 		)
 
 
