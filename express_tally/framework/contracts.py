@@ -32,6 +32,7 @@ class IntegrationFlow(ABC):
 	schema_version = 1
 	agent_profile = ""
 	allowed_roles = frozenset({"System Manager"})
+	default_options: Mapping[str, Any] = {}
 
 	def authorize(self, operation: str) -> None:
 		"""Authorize the current Frappe user before touching integration data."""
@@ -53,6 +54,8 @@ class IntegrationFlow(ABC):
 		}
 		if self.agent_profile:
 			metadata["agent_profile"] = self.agent_profile
+		if self.default_options:
+			metadata["default_options"] = dict(self.default_options)
 		return metadata
 
 	def status(self, context: FlowContext) -> Mapping[str, Any]:

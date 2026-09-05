@@ -210,6 +210,7 @@ class ControlCentre:
 						flow.get("direction"),
 						flow.get("agent_profile"),
 						limit,
+						flow.get("default_options"),
 					).to_dict()
 				self._record({"at": utc_now(), "source": source, **summary})
 		except Exception as exc:

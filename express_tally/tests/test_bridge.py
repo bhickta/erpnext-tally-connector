@@ -19,7 +19,13 @@ from express_tally.bridge.json_gateway import (
 	parse_import_response,
 )
 from express_tally.bridge.http_server import BridgeHTTPServer
-from express_tally.bridge.inbound_profiles import TallyVouchersProfile, normalize_master, normalize_voucher
+from express_tally.bridge.inbound_profiles import (
+	TallyLedgerMirrorProfile,
+	TallyVouchersProfile,
+	normalize_master,
+	normalize_voucher,
+	tally_balance,
+)
 from express_tally.bridge.profiles import AgentProfile, AgentProfileRegistry
 from express_tally.bridge.service import SyncService, SyncSummary
 from express_tally.bridge.xml_gateway import ImportResult as XMLImportResult
@@ -197,6 +203,7 @@ class TestTallyCollectionGateway(TestCase):
 		self.assertIn("erpnext_to_tally", profiles["inventory_sales_voucher_v1"]["directions"])
 		self.assertIn("tally_to_erpnext", profiles["tally_masters_v1"]["directions"])
 		self.assertIn("tally_to_erpnext", profiles["tally_vouchers_v1"]["directions"])
+		self.assertIn("tally_to_erpnext", profiles["tally_ledger_mirror_v1"]["directions"])
 
 	def test_inline_collection_request_needs_no_installed_tdl(self):
 		request = build_collection_export(
@@ -213,6 +220,65 @@ class TestTallyCollectionGateway(TestCase):
 			[element.text for element in root.findall(".//NATIVEMETHOD")],
 			["Name", "DecimalPlaces", "AlterID"],
 		)
+
+	def test_collection_request_supports_period_variables(self):
+		request = build_collection_export(
+			"Tally Company",
+			"ETLedgers",
+			"Ledger",
+			("Name", "ClosingBalance"),
+			static_variables={"SVFROMDATE": "20260331", "SVTODATE": "20260331"},
+		)
+		root = ET.fromstring(request)
+
+		self.assertEqual(root.findtext(".//SVFROMDATE"), "20260331")
+		self.assertEqual(root.findtext(".//SVTODATE"), "20260331")
+
+	def test_tally_balances_are_normalized_to_debit_minus_credit(self):
+		self.assertEqual(tally_balance("-125.50"), 125.5)
+		self.assertEqual(tally_balance("125.50 Cr"), -125.5)
+		self.assertEqual(tally_balance("125.50 Dr"), 125.5)
+
+	def test_ledger_mirror_offers_previous_day_closing_as_opening_first(self):
+		groups = """
+		<ENVELOPE><BODY><DATA><COLLECTION>
+		<GROUP NAME="Cash-in-Hand"><PARENT>Current Assets</PARENT></GROUP>
+		</COLLECTION></DATA></BODY></ENVELOPE>
+		"""
+		ledgers = """
+		<ENVELOPE><BODY><DATA><COLLECTION>
+		<LEDGER NAME="Cash"><PARENT>Cash-in-Hand</PARENT><CLOSINGBALANCE>-125.50</CLOSINGBALANCE>
+		<GUID>cash-guid</GUID><ALTERID>7</ALTERID></LEDGER>
+		</COLLECTION></DATA></BODY></ENVELOPE>
+		"""
+		tally = Mock()
+		tally.export_collection.side_effect = [groups, ledgers]
+		with tempfile.TemporaryDirectory() as directory:
+			config = BridgeConfig(
+				frappe_url="https://erp.example.com",
+				api_key="key",
+				api_secret="secret",
+				erpnext_company="ERP Company",
+				target_id="target-1",
+				tally_company="Tally Company",
+				flow_name="test.ledger_mirror",
+				runtime_directory=directory,
+			)
+			records = TallyLedgerMirrorProfile().collect(
+				config,
+				tally,
+				20,
+				{"fiscal_year_start": "2026-04-01"},
+			)
+
+		self.assertEqual(len(records), 1)
+		self.assertEqual(records[0]["kind"], "opening_balance")
+		self.assertEqual(records[0]["posting_date"], "2026-04-01")
+		self.assertEqual(records[0]["snapshot_date"], "2026-03-31")
+		self.assertEqual(records[0]["balance"], 125.5)
+		ledger_request = ET.fromstring(tally.export_collection.call_args_list[1].args[0])
+		self.assertEqual(ledger_request.findtext(".//SVFROMDATE"), "20260331")
+		self.assertEqual(ledger_request.findtext(".//SVTODATE"), "20260331")
 
 	def test_collection_response_preserves_nested_voucher_entries(self):
 		response = """
@@ -375,7 +441,13 @@ class TestSyncService(TestCase):
 			key = "example_inbound_v1"
 
 			def collect(self, config, tally_client, limit, options=None):
-				return [{"name": "TALLY-1", "voucher_type": options["voucher_type"]}]
+				return [
+					{
+						"name": "TALLY-1",
+						"voucher_type": options["voucher_type"],
+						"fiscal_year_start": options["fiscal_year_start"],
+					}
+				]
 
 		frappe_client = Mock()
 		frappe_client.receive.return_value = {"results": [{"status": "Success"}]}
@@ -385,7 +457,10 @@ class TestSyncService(TestCase):
 		profiles = AgentProfileRegistry([ExampleInboundProfile])
 
 		result = SyncService(config, frappe_client, tally_client, profiles).sync_flow(
-			"test.inbound", "tally_to_erpnext", "example_inbound_v1"
+			"test.inbound",
+			"tally_to_erpnext",
+			"example_inbound_v1",
+			default_options={"voucher_type": "Payment", "fiscal_year_start": "2026-04-01"},
 		)
 
 		self.assertEqual(result.fetched, 1)
@@ -393,7 +468,13 @@ class TestSyncService(TestCase):
 		frappe_client.receive.assert_called_once_with(
 			config,
 			"test.inbound",
-			[{"name": "TALLY-1", "voucher_type": "Receipt"}],
+			[
+				{
+					"name": "TALLY-1",
+					"voucher_type": "Receipt",
+					"fiscal_year_start": "2026-04-01",
+				}
+			],
 		)
 
 

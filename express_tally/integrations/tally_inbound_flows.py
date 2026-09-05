@@ -126,7 +126,7 @@ class LoggedInboundFlow(InboundFlow):
 
 	def receive(self, context, records):
 		results = []
-		for record in records:
+		for index, record in enumerate(records):
 			if not isinstance(record, Mapping) or not record.get("_tally_key"):
 				results.append({"status": "Failed", "message": "Invalid Tally source identity"})
 				continue
@@ -147,16 +147,20 @@ class LoggedInboundFlow(InboundFlow):
 				record = dict(record)
 				record["_previous_doctype"] = previous_target.get("source_doctype")
 				record["_previous_name"] = previous_target.get("target_reference")
-			if record.get("cancelled") or record.get("deleted"):
-				result = self._cancel_previous(record)
-				self.sync_log.record(context, record, result, operation="Cancel")
-				results.append(result)
-				continue
+			savepoint = f"tally_inbound_{index}"
+			frappe.db.savepoint(savepoint)
 			try:
-				result = self.apply_record(context, record)
+				if record.get("cancelled") or record.get("deleted"):
+					result = self._cancel_previous(record)
+					operation = "Cancel"
+				else:
+					result = self.apply_record(context, record)
+					operation = "Alter" if previous_target else "Create"
 			except Exception as exc:
+				frappe.db.rollback(save_point=savepoint)
 				result = _success_result(record, status="Failed", message=str(exc))
-			self.sync_log.record(context, record, result, operation="Alter" if previous_target else "Create")
+				operation = "Alter" if previous_target else "Create"
+			self.sync_log.record(context, record, result, operation=operation)
 			results.append(result)
 		return results
 

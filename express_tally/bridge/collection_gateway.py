@@ -17,7 +17,14 @@ def normalized_key(value):
 	return value.lower()
 
 
-def build_collection_export(company, collection_name, object_type, native_fields, filters=()):
+def build_collection_export(
+	company,
+	collection_name,
+	object_type,
+	native_fields,
+	filters=(),
+	static_variables=None,
+):
 	"""Build an inline collection export; no TDL/TCP needs to be installed in Tally."""
 	envelope = ET.Element("ENVELOPE")
 	header = ET.SubElement(envelope, "HEADER")
@@ -30,6 +37,10 @@ def build_collection_export(company, collection_name, object_type, native_fields
 	static = ET.SubElement(description, "STATICVARIABLES")
 	ET.SubElement(static, "SVEXPORTFORMAT").text = "$$SysName:XML"
 	ET.SubElement(static, "SVCURRENTCOMPANY").text = company
+	for name, value in (static_variables or {}).items():
+		if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", str(name)):
+			raise ValueError(f"Invalid Tally static variable: {name}")
+		ET.SubElement(static, str(name).upper()).text = str(value)
 	tdl = ET.SubElement(description, "TDL")
 	message = ET.SubElement(tdl, "TDLMESSAGE")
 	collection = ET.SubElement(

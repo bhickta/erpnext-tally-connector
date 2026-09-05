@@ -45,6 +45,11 @@ accounting policy. The bundled `inventory_sales_voucher_v1` profile currently
 handles SRV Sales Orders and Delivery Notes from ERPNext to Tally. Inbound data
 types require their corresponding registered flow and extraction profile.
 
+The bundled `tally_ledger_mirror_v1` profile supports staged financial-year
+opening, voucher, and closing-balance records for company-specific ledger mirror
+flows. The ERPNext app that registers the flow remains responsible for exact
+ledger/party mapping and reconciliation policy.
+
 ## Advanced command-line operation
 
 The Control Centre UI is the normal interface. These commands remain available

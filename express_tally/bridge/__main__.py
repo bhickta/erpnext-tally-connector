@@ -58,8 +58,17 @@ def main(argv=None):
 	)
 	try:
 		if command == "self-test":
+			from .profiles import AgentProfileRegistry
+
 			web_root = Path(__file__).resolve().with_name("web")
-			return 0 if (web_root / "index.html").is_file() else 2
+			profiles = {row["key"] for row in AgentProfileRegistry().metadata()}
+			required_profiles = {
+				"inventory_sales_voucher_v1",
+				"tally_masters_v1",
+				"tally_vouchers_v1",
+				"tally_ledger_mirror_v1",
+			}
+			return 0 if (web_root / "index.html").is_file() and required_profiles <= profiles else 2
 		if command == "serve":
 			controller = ControlCentre(args.config)
 			config = controller.config()

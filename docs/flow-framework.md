@@ -132,6 +132,12 @@ They fetch standard Tally masters and vouchers over the localhost XML gateway,
 normalize the response, and use per-target Alter ID checkpoints stored by the
 Control Centre. ERPNext performs the final validation and document mapping.
 
+The connector also includes `tally_ledger_mirror_v1` for company-owned financial
+migration flows. It stages previous-day ledger closing balances as fiscal-year
+openings, then accounting vouchers, then per-ledger closing balances for
+reconciliation. Such a flow must provide `fiscal_year_start` in its
+`default_options`; company-specific account and party policy remains on ERPNext.
+
 ## State and idempotency
 
 The framework deliberately does not use a shared `is_synced` field. State is

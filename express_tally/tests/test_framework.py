@@ -31,12 +31,16 @@ class ExampleOutboundFlow(OutboundFlow):
 
 class ExampleInboundFlow(InboundFlow):
 	key = "test.inbound"
+	default_options = {"mode": "safe", "submit": False}
 
 	def authorize(self, operation):
 		pass
 
 	def receive(self, context, records):
-		return [{"source": row["name"], "status": "Success"} for row in records]
+		return [
+			{"source": row["name"], "status": "Success", "options": dict(context.options)}
+			for row in records
+		]
 
 
 class TestFlowRegistry(TestCase):
@@ -53,7 +57,7 @@ class TestFlowRegistry(TestCase):
 	def test_discovers_dotted_paths_from_frappe_hooks(self):
 		fake_frappe = SimpleNamespace(
 			get_hooks=lambda hook: [
-				"express_tally.tests.test_framework.ExampleOutboundFlow",
+				f"{ExampleOutboundFlow.__module__}.ExampleOutboundFlow",
 			]
 		)
 		with patch.dict(sys.modules, {"frappe": fake_frappe}):
@@ -93,6 +97,14 @@ class TestFlowEngine(TestCase):
 
 		self.assertEqual(response["direction"], "tally_to_erpnext")
 		self.assertEqual(response["results"][0]["source"], "TALLY-1")
+		self.assertEqual(response["results"][0]["options"], {"mode": "safe", "submit": False})
+
+	def test_context_options_override_flow_defaults(self):
+		context = FlowContext("ERP Company", "target-1", "Tally Company", options={"submit": True})
+
+		response = self.engine.receive("test.inbound", context, [{"name": "TALLY-1"}])
+
+		self.assertEqual(response["results"][0]["options"], {"mode": "safe", "submit": True})
 
 	def test_direction_mismatch_is_rejected(self):
 		with self.assertRaisesRegex(ValueError, "does not support pull"):

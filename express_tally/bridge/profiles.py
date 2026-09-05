@@ -80,10 +80,20 @@ class InventorySalesVoucherProfile(AgentProfile):
 
 class AgentProfileRegistry:
 	def __init__(self, entries=()):
-		from .inbound_profiles import TallyMastersProfile, TallyVouchersProfile
+		from .inbound_profiles import (
+			TallyLedgerMirrorProfile,
+			TallyMastersProfile,
+			TallyVouchersProfile,
+		)
 
 		self._profiles = {}
-		for entry in (InventorySalesVoucherProfile, TallyMastersProfile, TallyVouchersProfile, *entries):
+		for entry in (
+			InventorySalesVoucherProfile,
+			TallyMastersProfile,
+			TallyVouchersProfile,
+			TallyLedgerMirrorProfile,
+			*entries,
+		):
 			self.register(entry)
 
 	def register(self, entry):

@@ -3,6 +3,7 @@
 import json
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 
 from .contracts import FlowContext, FlowDirection, InboundFlow, OutboundFlow
@@ -67,10 +68,18 @@ class FlowEngine:
 	def list_flows(self) -> list[dict[str, Any]]:
 		return [flow.metadata() for flow in self.registry.all()]
 
+	@staticmethod
+	def _with_default_options(flow, context):
+		defaults = dict(getattr(flow, "default_options", {}) or {})
+		if not defaults:
+			return context
+		return replace(context, options={**defaults, **dict(context.options)})
+
 	def pull(self, flow_key: str, context: FlowContext, limit: int = 20) -> dict[str, Any]:
 		flow = self.registry.get(flow_key)
 		if not isinstance(flow, OutboundFlow):
 			raise ValueError(f"Tally flow {flow_key} does not support pull")
+		context = self._with_default_options(flow, context)
 		limit = min(max(int(limit), 1), MAX_BATCH_SIZE)
 		flow.authorize("pull")
 		documents = list(flow.pull(context, limit))
@@ -91,6 +100,7 @@ class FlowEngine:
 		flow = self.registry.get(flow_key)
 		if not isinstance(flow, OutboundFlow):
 			raise ValueError(f"Tally flow {flow_key} does not support acknowledgement")
+		context = self._with_default_options(flow, context)
 		flow.authorize("acknowledge")
 		response = dict(flow.acknowledge(context, parse_sequence(results, "results")))
 		return {"flow": flow.key, **response}
@@ -99,6 +109,7 @@ class FlowEngine:
 		flow = self.registry.get(flow_key)
 		if not isinstance(flow, InboundFlow):
 			raise ValueError(f"Tally flow {flow_key} does not support receive")
+		context = self._with_default_options(flow, context)
 		flow.authorize("receive")
 		results = list(flow.receive(context, parse_sequence(records, "records")))
 		return {
@@ -110,5 +121,6 @@ class FlowEngine:
 
 	def status(self, flow_key: str, context: FlowContext) -> dict[str, Any]:
 		flow = self.registry.get(flow_key)
+		context = self._with_default_options(flow, context)
 		flow.authorize("status")
 		return {"flow": flow.key, **dict(flow.status(context))}

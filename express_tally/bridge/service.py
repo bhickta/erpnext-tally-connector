@@ -65,7 +65,7 @@ class SyncService:
 		flow = self.config.flow_name or next(iter(self.config.selected_flows), "")
 		return self.sync_flow(flow, "erpnext_to_tally", limit=limit)
 
-	def sync_flow(self, flow, direction, agent_profile=None, limit=None):
+	def sync_flow(self, flow, direction, agent_profile=None, limit=None, default_options=None):
 		if not self._lock.acquire(blocking=False):
 			return SyncSummary(
 				skipped=1,
@@ -77,7 +77,7 @@ class SyncService:
 			if direction == "erpnext_to_tally":
 				return self._sync_outbound(flow, limit)
 			if direction == "tally_to_erpnext":
-				return self._sync_inbound(flow, agent_profile, limit)
+				return self._sync_inbound(flow, agent_profile, limit, default_options)
 			return SyncSummary(error=f"Unsupported sync direction: {direction}", flow=flow, direction=direction)
 		finally:
 			self._lock.release()
@@ -139,7 +139,7 @@ class SyncService:
 				summary.failed += 1
 		return summary
 
-	def _sync_inbound(self, flow, agent_profile, limit=None):
+	def _sync_inbound(self, flow, agent_profile, limit=None, default_options=None):
 		summary = SyncSummary(flow=flow, direction="tally_to_erpnext")
 		if not self._check_environment(summary):
 			return summary
@@ -148,7 +148,10 @@ class SyncService:
 			if not profile.supports_direction("tally_to_erpnext"):
 				raise ValueError(f"Agent profile {profile.key} does not support Tally to ERPNext")
 			profile.validate_environment(self.tally)
-			options = (self.config.flow_options or {}).get(flow, {})
+			options = {
+				**dict(default_options or {}),
+				**dict((self.config.flow_options or {}).get(flow, {})),
+			}
 			records = list(profile.collect(self.config, self.tally, limit or self.config.batch_size, options))
 			summary.fetched = len(records)
 			response = self.frappe.receive(self.config, flow, records)
