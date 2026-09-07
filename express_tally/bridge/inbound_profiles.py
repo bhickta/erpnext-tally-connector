@@ -440,6 +440,12 @@ class TallyLedgerMirrorProfile(IncrementalTallyProfile):
 			record = normalize_voucher(raw)
 			if not record:
 				continue
+			excluded_origins = set(options.get("excluded_origins") or ())
+			if any(
+				f"[ExpressTallyOrigin:{origin}]" in str(record.get("narration") or "")
+				for origin in excluded_origins
+			):
+				continue
 			name = record.get("voucher_number") or record.get("master_id")
 			record.update(_identity("ledger_mirror_voucher", raw, name))
 			record["kind"] = "ledger_voucher"

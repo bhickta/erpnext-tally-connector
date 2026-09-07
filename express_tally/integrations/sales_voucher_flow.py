@@ -43,11 +43,22 @@ class SalesDocumentMapper:
 		previous_reference = self.flow.sync_log.previous_target_reference(
 			document.doctype, document.name, target_id
 		)
+		docstatus = int(document.get("docstatus", 1) or 0)
+		if docstatus == 2 and not previous_reference:
+			raise ValueError(f"Cannot cancel unsynced {document.doctype} {document.name} in Tally")
+		is_return = bool(document.get("is_return"))
 		payload = {
 			"source_doctype": document.doctype,
 			"name": document.name,
 			"modified": str(document.modified),
-			"operation": "Alter" if previous_reference else "Create",
+			"operation": "Cancel" if docstatus == 2 else ("Alter" if previous_reference else "Create"),
+			"identity_namespace": getattr(
+				self.flow, "identity_namespace", getattr(self.flow, "key", "express-tally")
+			),
+			"voucher_type": "Credit Note" if is_return else "Sales",
+			"is_invoice": document.doctype == "Sales Invoice",
+			"is_return": is_return,
+			"origin_marker": self.flow.key if getattr(self.flow, "mark_origin", False) else "",
 			"tally_voucher_id": previous_reference,
 			"transaction_date": str(transaction_date),
 			"delivery_date": str(delivery_date),
@@ -170,6 +181,7 @@ class SalesDocumentsToTallyFlow(OutboundFlow):
 	source_specs = DEFAULT_SOURCES
 	mapper_class = SalesDocumentMapper
 	include_unscoped_legacy = False
+	identity_namespace = "express-tally"
 
 	def __init__(self):
 		self.sync_log = OutboundSyncLog(

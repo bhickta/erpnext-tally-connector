@@ -21,6 +21,19 @@ def utc_now():
 	return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def validate_exclusive_flows(flows):
+	owners = {}
+	for flow in flows:
+		group = flow.get("exclusive_group")
+		if group and group in owners:
+			raise ValueError(
+				f"Flows {owners[group]} and {flow.get('key')} cannot run together "
+				f"because both own {group}"
+			)
+		if group:
+			owners[group] = flow.get("key")
+
+
 class ControlCentre:
 	"""Long-running coordinator shared by the local UI and automatic scheduler."""
 
@@ -193,6 +206,7 @@ class ControlCentre:
 			]
 			if not matching:
 				raise ValueError("No selected, available flow matches this sync direction")
+			validate_exclusive_flows(matching)
 			for flow in matching:
 				if not flow.get("available"):
 					summary = {

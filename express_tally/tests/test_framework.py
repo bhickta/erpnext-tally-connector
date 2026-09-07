@@ -4,7 +4,8 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
-from express_tally.framework import FlowContext, FlowEngine, FlowRegistry, InboundFlow, OutboundFlow
+from express_tally.framework import FlowContext, FlowEngine, FlowRegistry, InboundFlow, OutboundFlow, SourceSpec
+from express_tally.framework.sync_log import sync_idempotency_key
 from express_tally.framework.engine import make_context, parse_sequence
 
 
@@ -118,3 +119,13 @@ class TestFlowEngine(TestCase):
 			make_context("ERP", "bad target", "Tally")
 		with self.assertRaisesRegex(ValueError, "Every records entry"):
 			parse_sequence(["not-an-object"], "records")
+
+	def test_sync_identity_is_stable_and_source_version_specific(self):
+		first = sync_idempotency_key("outbound", "flow", "target", "SI-1", "v1")
+		self.assertEqual(first, sync_idempotency_key("outbound", "flow", "target", "SI-1", "v1"))
+		self.assertNotEqual(first, sync_idempotency_key("outbound", "flow", "target", "SI-1", "v2"))
+
+	def test_source_can_include_only_previously_synced_cancellations(self):
+		source = SourceSpec("Sales Invoice", "posting_date", include_cancelled_if_synced=True)
+		self.assertTrue(source.submitted_only)
+		self.assertTrue(source.include_cancelled_if_synced)

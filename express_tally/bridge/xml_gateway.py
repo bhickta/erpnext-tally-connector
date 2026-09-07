@@ -197,72 +197,92 @@ def build_master_imports(order, company):
 	return requests
 
 
-def _voucher_attributes(order, target_id):
+def voucher_remote_id(order, target_id):
 	source_doctype = order.get("source_doctype", "Sales Order")
-	remote_id = str(
+	identity_namespace = order.get("identity_namespace") or "express-tally"
+	voucher_type = order.get("voucher_type") or "Sales"
+	return str(
 		uuid.uuid5(
 			uuid.NAMESPACE_URL,
-			f"srv-erp:{target_id}:{source_doctype}:Sales Voucher:{order['name']}",
+			f"{identity_namespace}:{target_id}:{source_doctype}:{voucher_type} Voucher:{order['name']}",
 		)
 	)
+
+
+def _voucher_attributes(order, target_id):
+	remote_id = voucher_remote_id(order, target_id)
+	voucher_type = order.get("voucher_type") or "Sales"
 	attributes = {
 		"REMOTEID": remote_id,
-		"VCHTYPE": "Sales",
+		"VCHTYPE": voucher_type,
 		"ACTION": order["operation"],
 		"OBJVIEW": "Accounting Voucher View",
 	}
 	if order["operation"] == "Alter":
 		if order.get("tally_voucher_id"):
-			attributes.update(
-				{"TAGNAME": "MASTER ID", "TAGVALUE": order["tally_voucher_id"]}
-			)
+			reference = str(order["tally_voucher_id"])
+			if reference.startswith("guid:"):
+				attributes.update({"TAGNAME": "GUID", "TAGVALUE": reference.removeprefix("guid:")})
+			else:
+				attributes.update({"TAGNAME": "MASTER ID", "TAGVALUE": reference})
 		else:
 			attributes.update({"TAGNAME": "Voucher Number", "TAGVALUE": order["name"]})
+	if order["operation"] == "Cancel" and order.get("tally_voucher_id"):
+		reference = str(order["tally_voucher_id"])
+		if reference.startswith("guid:"):
+			attributes.update({"TAGNAME": "GUID", "TAGVALUE": reference.removeprefix("guid:")})
+		else:
+			attributes.update({"TAGNAME": "MASTER ID", "TAGVALUE": reference})
 	return attributes, remote_id
 
 
 def build_voucher_import(order, company, target_id):
 	root, message = _import_envelope("Vouchers", company)
 	attributes, remote_id = _voucher_attributes(order, target_id)
+	voucher_type = order.get("voucher_type") or "Sales"
 	voucher = _element(message, "VOUCHER", **attributes)
 	_element(voucher, "GUID", remote_id)
 	_element(voucher, "DATE", _date(order["transaction_date"]))
-	_element(voucher, "VOUCHERTYPENAME", "Sales")
+	_element(voucher, "VOUCHERTYPENAME", voucher_type)
 	_element(voucher, "VOUCHERNUMBER", order["name"])
 	_element(voucher, "REFERENCE", order.get("reference") or order["name"])
 	_element(voucher, "PARTYNAME", order["customer"]["name"])
 	_element(voucher, "PARTYLEDGERNAME", order["customer"]["name"])
 	source_doctype = order.get("source_doctype", "Sales Order")
+	narration = order.get("narration") or f"ERPNext {source_doctype} {order['name']}"
+	if order.get("origin_marker"):
+		narration = f"[ExpressTallyOrigin:{order['origin_marker']}]\n{narration}"
 	_element(
 		voucher,
 		"NARRATION",
-		order.get("narration") or f"ERPNext {source_doctype} {order['name']}",
+		narration,
 	)
 	_element(voucher, "PERSISTEDVIEW", "Accounting Voucher View")
-	_element(voucher, "ISINVOICE", "No")
+	_element(voucher, "ISINVOICE", _yes_no(order.get("is_invoice")))
 	_element(voucher, "ISORDER", "No")
 	_element(voucher, "ISOPTIONAL", "No")
 
 	grand_total = Decimal(str(order["grand_total"] or 0))
 	party_entry = _element(voucher, "LEDGERENTRIES.LIST")
 	_element(party_entry, "LEDGERNAME", order["customer"]["name"])
-	_element(party_entry, "ISDEEMEDPOSITIVE", "Yes")
+	party_amount = -grand_total
+	_element(party_entry, "ISDEEMEDPOSITIVE", _yes_no(party_amount < 0))
 	_element(party_entry, "ISPARTYLEDGER", "Yes")
-	_element(party_entry, "ISLASTDEEMEDPOSITIVE", "Yes")
+	_element(party_entry, "ISLASTDEEMEDPOSITIVE", _yes_no(party_amount < 0))
 	if grand_total:
-		_element(party_entry, "AMOUNT", _amount(-grand_total))
+		_element(party_entry, "AMOUNT", _amount(party_amount))
 		bill = _element(party_entry, "BILLALLOCATIONS.LIST")
 		_element(bill, "NAME", order["name"])
 		_element(bill, "BILLTYPE", "New Ref")
-		_element(bill, "AMOUNT", _amount(-grand_total))
+		_element(bill, "AMOUNT", _amount(party_amount))
 
 
 	sales_entry = _element(voucher, "LEDGERENTRIES.LIST")
 	_element(sales_entry, "LEDGERNAME", order["sales_ledger"])
-	_element(sales_entry, "ISDEEMEDPOSITIVE", "No")
 	net_total = Decimal(
 		str(order.get("net_total") or sum(Decimal(str(item["amount"] or 0)) for item in order["items"]))
 	)
+	_element(sales_entry, "ISDEEMEDPOSITIVE", _yes_no(net_total < 0))
 	if net_total:
 		_element(sales_entry, "AMOUNT", _amount(net_total))
 
@@ -270,7 +290,7 @@ def build_voucher_import(order, company, target_id):
 		item_amount = Decimal(str(item["amount"] or 0))
 		inventory = _element(sales_entry, "INVENTORYALLOCATIONS.LIST")
 		_element(inventory, "STOCKITEMNAME", item["item_code"])
-		_element(inventory, "ISDEEMEDPOSITIVE", "No")
+		_element(inventory, "ISDEEMEDPOSITIVE", _yes_no(item_amount < 0))
 		if item_amount:
 			_element(inventory, "RATE", f"{_amount(item['rate'])}/{item['stock_uom']}")
 			_element(inventory, "AMOUNT", _amount(item_amount))
@@ -288,10 +308,11 @@ def build_voucher_import(order, company, target_id):
 			_element(batch, "BILLEDQTY", qty)
 
 	for tax in order["taxes"]:
+		tax_amount = Decimal(str(tax["amount"] or 0))
 		tax_entry = _element(voucher, "LEDGERENTRIES.LIST")
 		_element(tax_entry, "LEDGERNAME", tax["ledger"])
-		_element(tax_entry, "ISDEEMEDPOSITIVE", "No")
-		_element(tax_entry, "AMOUNT", _amount(tax["amount"]))
+		_element(tax_entry, "ISDEEMEDPOSITIVE", _yes_no(tax_amount < 0))
+		_element(tax_entry, "AMOUNT", _amount(tax_amount))
 
 	if order.get("rounding_adjustment"):
 		rounding_entry = _element(voucher, "LEDGERENTRIES.LIST")

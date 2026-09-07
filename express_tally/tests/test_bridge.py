@@ -12,7 +12,7 @@ from unittest.mock import Mock
 from express_tally.bridge.clients import FrappeClient
 from express_tally.bridge.collection_gateway import build_collection_export, parse_collection_export
 from express_tally.bridge.config import SECRET_MASK, BridgeConfig, ConfigStore
-from express_tally.bridge.controller import ControlCentre
+from express_tally.bridge.controller import ControlCentre, validate_exclusive_flows
 from express_tally.bridge.json_gateway import (
 	build_master_imports,
 	build_voucher_import,
@@ -26,7 +26,7 @@ from express_tally.bridge.inbound_profiles import (
 	normalize_voucher,
 	tally_balance,
 )
-from express_tally.bridge.profiles import AgentProfile, AgentProfileRegistry
+from express_tally.bridge.profiles import AgentProfile, AgentProfileRegistry, InventorySalesVoucherProfile
 from express_tally.bridge.service import SyncService, SyncSummary
 from express_tally.bridge.xml_gateway import ImportResult as XMLImportResult
 from express_tally.bridge.xml_gateway import build_voucher_import as build_xml_voucher_import
@@ -184,6 +184,32 @@ class TestTallyXMLVoucherGateway(TestCase):
 		self.assertIsNone(inventory.find("AMOUNT"))
 		self.assertEqual(inventory.findtext("ACTUALQTY"), "2 Nos")
 
+	def test_credit_note_uses_return_signs_and_origin_marker(self):
+		invoice = sample_order()
+		invoice.update(
+			source_doctype="Sales Invoice",
+			voucher_type="Credit Note",
+			is_invoice=True,
+			origin_marker="raplbaddi.sales_invoices_to_tally",
+			net_total=-250,
+			grand_total=-295,
+			taxes=[{"ledger": "Output IGST", "amount": -45}],
+		)
+		invoice["items"][0].update(stock_qty=-2, amount=-250, rate=125)
+
+		voucher = ET.fromstring(
+			build_xml_voucher_import(invoice, "Test Company", "target-1")
+		).find(".//VOUCHER")
+
+		self.assertEqual(voucher.attrib["VCHTYPE"], "Credit Note")
+		self.assertEqual(voucher.findtext("VOUCHERTYPENAME"), "Credit Note")
+		self.assertEqual(voucher.findtext("ISINVOICE"), "Yes")
+		self.assertEqual(voucher.findtext("LEDGERENTRIES.LIST/ISDEEMEDPOSITIVE"), "No")
+		self.assertIn(
+			"[ExpressTallyOrigin:raplbaddi.sales_invoices_to_tally]",
+			voucher.findtext("NARRATION"),
+		)
+
 	def test_alter_uses_the_acknowledged_tally_master_id(self):
 		order = sample_order()
 		order.update(operation="Alter", tally_voucher_id="42")
@@ -194,6 +220,33 @@ class TestTallyXMLVoucherGateway(TestCase):
 		self.assertEqual(voucher.attrib["ACTION"], "Alter")
 		self.assertEqual(voucher.attrib["TAGNAME"], "MASTER ID")
 		self.assertEqual(voucher.attrib["TAGVALUE"], "42")
+
+	def test_cancel_uses_previous_reference_and_skips_master_imports(self):
+		document = sample_order()
+		document.update(operation="Cancel", tally_voucher_id="42")
+		config = BridgeConfig(target_id="target-1", tally_company="Test Company")
+		tally = Mock()
+		tally.import_xml.return_value = XMLImportResult(success=True, altered=1, last_voucher_id="42")
+
+		target = InventorySalesVoucherProfile().deliver(document, config, tally)
+
+		self.assertEqual(target, "42")
+		tally.import_json.assert_not_called()
+		voucher = ET.fromstring(tally.import_xml.call_args.args[0]).find(".//VOUCHER")
+		self.assertEqual(voucher.attrib["ACTION"], "Cancel")
+		self.assertEqual(voucher.attrib["TAGNAME"], "MASTER ID")
+		self.assertEqual(voucher.attrib["TAGVALUE"], "42")
+
+	def test_ignored_retry_returns_deterministic_guid_reference(self):
+		document = sample_order()
+		config = BridgeConfig(target_id="target-1", tally_company="Test Company")
+		tally = Mock()
+		tally.import_json.return_value = XMLImportResult(success=True, altered=1)
+		tally.import_xml.return_value = XMLImportResult(success=True, ignored=1)
+
+		target = InventorySalesVoucherProfile().deliver(document, config, tally)
+
+		self.assertTrue(target.startswith("guid:"))
 
 
 class TestTallyCollectionGateway(TestCase):
@@ -343,6 +396,47 @@ class TestTallyCollectionGateway(TestCase):
 
 			profile.acknowledge_collected(config, records, [{"status": "Success"}])
 			self.assertEqual(profile.collect(config, tally, 20), [])
+
+	def test_ledger_mirror_excludes_vouchers_created_by_rapl_outbound_flow(self):
+		response = """
+		<ENVELOPE><BODY><DATA><COLLECTION><VOUCHER NAME="SINV-1">
+		<MASTERID>42</MASTERID><ALTERID>9</ALTERID><GUID>guid-1</GUID>
+		<VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><DATE>20260904</DATE>
+		<NARRATION>[ExpressTallyOrigin:raplbaddi.sales_invoices_to_tally]</NARRATION>
+		</VOUCHER></COLLECTION></DATA></BODY></ENVELOPE>
+		"""
+		tally = Mock()
+		tally.export_collection.return_value = response
+		with tempfile.TemporaryDirectory() as directory:
+			config = BridgeConfig(
+				frappe_url="https://erp.example.com",
+				api_key="key",
+				api_secret="secret",
+				erpnext_company="ERP Company",
+				target_id="target-1",
+				tally_company="Tally Company",
+				flow_name="test.ledger_mirror",
+				runtime_directory=directory,
+			)
+			records = TallyLedgerMirrorProfile()._vouchers(
+				config,
+				tally,
+				"2026-04-01",
+				"2026-09-07",
+				{},
+				{"excluded_origins": ["raplbaddi.sales_invoices_to_tally"]},
+			)
+
+		self.assertEqual(records, [])
+
+	def test_mutually_exclusive_accounting_imports_are_rejected(self):
+		with self.assertRaisesRegex(ValueError, "cannot run together"):
+			validate_exclusive_flows(
+				[
+					{"key": "standard", "exclusive_group": "tally_accounting_inbound"},
+					{"key": "mirror", "exclusive_group": "tally_accounting_inbound"},
+				]
+			)
 
 
 class TestSyncService(TestCase):

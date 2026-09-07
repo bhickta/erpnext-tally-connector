@@ -1,5 +1,6 @@
 """Reusable durable state for pull/acknowledge integration flows."""
 
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
@@ -14,6 +15,10 @@ VALID_STATUSES = frozenset({"Success", "Failed"})
 VALID_OPERATIONS = frozenset({"Create", "Alter", "Cancel"})
 
 
+def sync_idempotency_key(*parts: Any) -> str:
+	return hashlib.sha256("\x1f".join(str(part or "") for part in parts).encode()).hexdigest()
+
+
 @dataclass(frozen=True)
 class SourceSpec:
 	"""Describe a submitted ERPNext source that can be pulled incrementally."""
@@ -22,6 +27,8 @@ class SourceSpec:
 	date_field: str
 	company_field: str = "company"
 	submitted_only: bool = True
+	include_cancelled_if_synced: bool = False
+	sync_once: bool = False
 
 	def __post_init__(self):
 		if not DOCTYPE_PATTERN.fullmatch(self.doctype):
@@ -120,9 +127,32 @@ class OutboundSyncLog:
 			source_name = str(result.get("source_name") or "").strip()
 			if not frappe.db.exists(source_doctype, source_name):
 				raise ValueError(f"{source_doctype} {source_name} does not exist")
+			source_company = frappe.db.get_value(
+				source_doctype, source_name, self._source(source_doctype).company_field
+			)
+			if source_company != context.company:
+				raise ValueError(
+					f"{source_doctype} {source_name} does not belong to {context.company}"
+				)
 			target_reference = str(
 				result.get("target_reference") or result.get("tally_voucher_id") or ""
 			)
+			if status == "Success" and not target_reference:
+				raise ValueError("A successful Tally result requires a target_reference")
+			idempotency_key = None
+			if status == "Success":
+				source = self._source(source_doctype)
+				idempotency_key = self._idempotency_key(
+					context.target_id,
+					source_doctype,
+					source_name,
+					operation
+					if source.sync_once
+					else result.get("source_modified") or result.get("source_version"),
+					"" if source.sync_once else result.get("source_hash"),
+				)
+				if frappe.db.exists("Tally Sync Log", {"idempotency_key": idempotency_key}):
+					continue
 			frappe.get_doc(
 				{
 					"doctype": "Tally Sync Log",
@@ -130,6 +160,7 @@ class OutboundSyncLog:
 					"direction": "ERPNext to Tally",
 					"company": context.company,
 					"request_id": request_id,
+					"idempotency_key": idempotency_key,
 					"status": status,
 					"operation": operation,
 					"source_system": "ERPNext",
@@ -191,7 +222,25 @@ class OutboundSyncLog:
 			f"source.`{source.company_field}` = %(company)s",
 			"log.name IS NULL",
 		]
-		if source.submitted_only:
+		if source.submitted_only and source.include_cancelled_if_synced:
+			conditions.append(
+				"""(
+					source.docstatus = 1
+					OR (
+						source.docstatus = 2
+						AND EXISTS (
+							SELECT 1 FROM `tabTally Sync Log` prior_log
+							WHERE prior_log.source_doctype = %(source_doctype)s
+							  AND prior_log.source_name = source.name
+							  AND prior_log.target_id = %(target_id)s
+							  AND prior_log.status = 'Success'
+							  AND (prior_log.flow_key = %(flow_key)s
+							       OR (%(include_legacy)s = 1 AND COALESCE(prior_log.flow_key, '') = ''))
+						)
+					)
+				)"""
+			)
+		elif source.submitted_only:
 			conditions.append("source.docstatus = 1")
 		values = {
 			"company": company,
@@ -200,6 +249,14 @@ class OutboundSyncLog:
 			"include_legacy": int(self.include_unscoped_legacy),
 			"limit": limit,
 		}
+		version_match = (
+			"""AND (
+				(source.docstatus = 2 AND log.operation = 'Cancel')
+				OR (source.docstatus != 2 AND log.operation IN ('Create', 'Alter'))
+			)"""
+			if source.sync_once
+			else "AND log.source_modified = source.modified"
+		)
 		if from_date:
 			conditions.append(f"source.`{source.date_field}` >= %(from_date)s")
 			values["from_date"] = from_date
@@ -213,7 +270,7 @@ class OutboundSyncLog:
 			LEFT JOIN `tabTally Sync Log` log
 			  ON log.source_doctype = %(source_doctype)s
 			 AND log.source_name = source.name
-			 AND log.source_modified = source.modified
+			 {version_match}
 			 AND log.target_id = %(target_id)s
 			 AND log.status = 'Success'
 			 AND (log.flow_key = %(flow_key)s
@@ -225,6 +282,17 @@ class OutboundSyncLog:
 			{**values, "source_doctype": source.doctype},
 		)
 		return [(str(row[0]), source.doctype, row[1]) for row in rows]
+
+	def _idempotency_key(self, target_id, source_doctype, source_name, source_version, source_hash):
+		return sync_idempotency_key(
+			"outbound",
+			self.flow_key,
+			target_id,
+			source_doctype,
+			source_name,
+			source_version,
+			source_hash,
+		)
 
 	def _source(self, source_doctype: str) -> SourceSpec:
 		try:

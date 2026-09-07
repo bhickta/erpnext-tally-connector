@@ -153,6 +153,24 @@ records acknowledgements idempotently by request ID, returns the latest target
 reference for Alter operations, and reports counts. A flow still owns mapping
 and any eligibility rules beyond submitted/company/date filtering.
 
+Successful inbound and outbound versions also receive a deterministic unique
+idempotency key. This protects the server when the same batch is delivered by
+more than one agent. Failed attempts do not consume that key and remain
+retryable.
+
+`SourceSpec(include_cancelled_if_synced=True)` includes cancelled documents only
+when the same source was previously acknowledged successfully. This supports a
+single cancellation event without ever exporting a document that was cancelled
+before its first sync.
+
+`SourceSpec(sync_once=True)` makes the source lifecycle-based instead of
+modified-version-based: one successful Create/Alter and at most one later
+Cancel are delivered for each source document and Target ID.
+
+Inbound flows which consume the same accounting-voucher stream should publish
+the same `exclusive_group`. The Control Centre refuses to run two selected flows
+from one exclusive group together.
+
 Destination identities must also be deterministic so a lost HTTP
 acknowledgement cannot duplicate a Tally voucher on retry.
 

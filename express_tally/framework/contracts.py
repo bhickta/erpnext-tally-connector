@@ -31,6 +31,7 @@ class IntegrationFlow(ABC):
 	direction: FlowDirection
 	schema_version = 1
 	agent_profile = ""
+	exclusive_group = ""
 	allowed_roles = frozenset({"System Manager"})
 	default_options: Mapping[str, Any] = {}
 
@@ -54,6 +55,8 @@ class IntegrationFlow(ABC):
 		}
 		if self.agent_profile:
 			metadata["agent_profile"] = self.agent_profile
+		if self.exclusive_group:
+			metadata["exclusive_group"] = self.exclusive_group
 		if self.default_options:
 			metadata["default_options"] = dict(self.default_options)
 		return metadata

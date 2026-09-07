@@ -9,6 +9,7 @@
   "direction",
   "company",
   "request_id",
+  "idempotency_key",
   "status",
   "operation",
   "source_section",
@@ -56,6 +57,13 @@
    "in_list_view": 1,
    "label": "Request ID",
    "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "idempotency_key",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Idempotency Key",
    "unique": 1
   },
   {

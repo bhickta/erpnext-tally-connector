@@ -9,6 +9,7 @@ import frappe
 from frappe.utils import now_datetime
 
 from express_tally.framework import InboundFlow
+from express_tally.framework.sync_log import sync_idempotency_key
 
 
 ALLOWED_ROLES = frozenset({"Tally Sync User", "Accounts Manager", "System Manager"})
@@ -77,6 +78,15 @@ class InboundLog:
 
 	def record(self, context, record, result, operation="Create"):
 		status = "Success" if str(result.get("status", "")).lower() in SUCCESS_STATUSES else "Failed"
+		idempotency_key = None
+		if status == "Success":
+			idempotency_key = sync_idempotency_key(
+				"inbound",
+				self.flow_key,
+				context.target_id,
+				record.get("_tally_key"),
+				_source_hash(record),
+			)
 		frappe.get_doc(
 			{
 				"doctype": "Tally Sync Log",
@@ -84,6 +94,7 @@ class InboundLog:
 				"direction": "Tally to ERPNext",
 				"company": context.company,
 				"request_id": str(uuid.uuid4()),
+				"idempotency_key": idempotency_key,
 				"status": status,
 				"operation": operation,
 				"source_system": "Tally",
@@ -364,6 +375,7 @@ class TallyVouchersToERPNextFlow(LoggedInboundFlow):
 	key = "express_tally.standard_vouchers_from_tally"
 	title = "Standard vouchers from Tally"
 	agent_profile = "tally_vouchers_v1"
+	exclusive_group = "tally_accounting_inbound"
 
 	def apply_record(self, context, record):
 		voucher_type = str(record.get("voucher_type") or "").casefold()

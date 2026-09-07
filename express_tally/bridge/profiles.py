@@ -6,7 +6,7 @@ from copy import deepcopy
 
 from .clients import BridgeRequestError
 from .json_gateway import build_master_imports
-from .xml_gateway import build_voucher_import, function_request
+from .xml_gateway import build_voucher_import, function_request, voucher_remote_id
 
 
 class AgentProfile:
@@ -59,7 +59,10 @@ class InventorySalesVoucherProfile(AgentProfile):
 				part for part in (document.get("narration"), date_note) if part
 			)
 
-		for master_payload in build_master_imports(document, config.tally_company):
+		master_payloads = () if document.get("operation") == "Cancel" else build_master_imports(
+			document, config.tally_company
+		)
+		for master_payload in master_payloads:
 			master_result = tally_client.import_json(
 				master_payload,
 				"All Masters",
@@ -75,7 +78,7 @@ class InventorySalesVoucherProfile(AgentProfile):
 		)
 		if not voucher_result.success:
 			raise BridgeRequestError(voucher_result.message or "Tally voucher import failed")
-		return voucher_result.last_voucher_id
+		return voucher_result.last_voucher_id or f"guid:{voucher_remote_id(document, config.target_id)}"
 
 
 class AgentProfileRegistry:
