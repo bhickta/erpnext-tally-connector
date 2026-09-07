@@ -54,3 +54,20 @@ def get_status(flow, company, target_id, tally_company, options=None):
 		flow,
 		_context(company, target_id, tally_company, options=options),
 	)
+
+
+@frappe.whitelist()
+def get_configuration(flow, company, target_id, tally_company, options=None):
+	return _engine().configuration(
+		flow,
+		_context(company, target_id, tally_company, options=options),
+	)
+
+
+@frappe.whitelist()
+def get_diagnostics(flow, company, target_id, tally_company, limit=50, options=None):
+	return _engine().diagnostics(
+		flow,
+		_context(company, target_id, tally_company, options=options),
+		limit,
+	)

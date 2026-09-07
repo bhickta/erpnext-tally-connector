@@ -17,6 +17,7 @@
         <nav>
           <button class="nav-item active" data-page="overview">Overview</button>
           <button class="nav-item" data-page="flows">Sync flows</button>
+          <button class="nav-item" data-page="operations">Operations</button>
           <button class="nav-item" data-page="history">History</button>
           <button class="nav-item" data-page="settings">Settings</button>
         </nav>
@@ -96,6 +97,47 @@
           <article class="panel">
             <div class="panel-heading"><div><p class="eyebrow">AUDIT TRAIL</p><h2>Synchronization history</h2></div></div>
             <div id="full-history"></div>
+          </article>
+        </section>
+
+        <section class="page" data-page-panel="operations">
+          <article class="panel operations-toolbar">
+            <div><p class="eyebrow">FLOW CONTROL</p><h2>Operate and troubleshoot</h2></div>
+            <label>Flow<select id="operation-flow"></select></label>
+            <button class="button secondary" id="refresh-operation">Refresh</button>
+            <button class="button secondary" id="preview-operation">Preview pending</button>
+            <button class="button primary" id="retry-operation">Run / retry flow</button>
+          </article>
+          <div id="operation-error" class="alert hidden"></div>
+          <div class="operation-status" id="operation-status"></div>
+          <div class="layout-grid operations-grid">
+            <article class="panel">
+              <div class="panel-heading"><div><p class="eyebrow">SAFE START</p><h2>First-run checklist</h2></div></div>
+              <div id="setup-checklist" class="checklist"><div class="empty">Select a configurable flow.</div></div>
+            </article>
+            <article class="panel">
+              <div class="panel-heading"><div><p class="eyebrow">FLOW OPTIONS</p><h2>Configuration</h2></div></div>
+              <div id="flow-options" class="form-grid"><div class="empty">This flow has no additional settings.</div></div>
+              <div class="form-actions"><button class="button primary" id="save-flow-options">Save flow configuration</button></div>
+            </article>
+          </div>
+          <article class="panel hidden" id="mapping-panel">
+            <div class="panel-heading"><div><p class="eyebrow">LEDGER POLICY</p><h2>Tally ledger mappings</h2></div><div class="inline-actions"><button class="button secondary" id="add-preview-ledgers">Add preview ledgers</button><button class="button secondary" id="add-mapping">Add mapping</button></div></div>
+            <p class="muted">Map only names that do not match automatically. Party mappings require both a party type and party.</p>
+            <datalist id="account-options"></datalist><datalist id="customer-options"></datalist><datalist id="supplier-options"></datalist>
+            <div class="mapping-table" id="mapping-rows"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">READ ONLY</p><h2>Pending preview</h2></div><span class="tag" id="preview-count">Not loaded</span></div>
+            <div id="preview-results"><div class="empty">Preview a flow before its first run or after correcting a failure.</div></div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">BALANCE PROOF</p><h2>Reconciliation</h2></div></div>
+            <div id="reconciliation-results"><div class="empty">No reconciliation records for this flow.</div></div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">SERVER AUDIT</p><h2>Record-level sync activity</h2></div></div>
+            <div id="activity-results"><div class="empty">No server activity for this flow.</div></div>
           </article>
         </section>
 

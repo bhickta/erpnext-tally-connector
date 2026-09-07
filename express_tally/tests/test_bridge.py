@@ -571,6 +571,24 @@ class TestSyncService(TestCase):
 			],
 		)
 
+	def test_outbound_preview_is_read_only_and_summarized(self):
+		frappe_client = Mock()
+		frappe_client.get_unsynced_documents.return_value = {
+			"schema_version": 1,
+			"flow": "srv.sales_documents_to_tally",
+			"documents": [sample_order()],
+		}
+		tally_client = Mock()
+		tally_client.get_current_company.return_value = "Tally Company"
+
+		result = SyncService(self.config, frappe_client, tally_client).preview_flow(
+			"srv.sales_documents_to_tally", "erpnext_to_tally", limit=10
+		)
+
+		self.assertEqual(result["count"], 1)
+		self.assertEqual(result["records"][0]["source"], "SAL-ORD-2026-00001")
+		frappe_client.acknowledge.assert_not_called()
+
 
 class TestFrappeFlowClient(TestCase):
 	def setUp(self):
@@ -605,6 +623,20 @@ class TestFrappeFlowClient(TestCase):
 		self.assertEqual(path, "/api/method/express_tally.framework.api.acknowledge")
 		self.assertEqual(data["company"], "ERP Company")
 		self.assertEqual(data["flow"], "srv.sales_documents_to_tally")
+
+	def test_client_fetches_flow_configuration_and_diagnostics(self):
+		self.client.get_flow_configuration(self.config, "srv.sales_documents_to_tally")
+		self.assertEqual(
+			self.client.request.call_args.args[1],
+			"/api/method/express_tally.framework.api.get_configuration",
+		)
+
+		self.client.get_flow_diagnostics(self.config, "srv.sales_documents_to_tally", 75)
+		self.assertEqual(
+			self.client.request.call_args.args[1],
+			"/api/method/express_tally.framework.api.get_diagnostics",
+		)
+		self.assertEqual(self.client.request.call_args.args[2]["limit"], 75)
 
 
 class TestBridgeHTTPServer(TestCase):

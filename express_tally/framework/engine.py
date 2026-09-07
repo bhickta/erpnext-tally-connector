@@ -7,6 +7,7 @@ from dataclasses import replace
 from typing import Any
 
 from .contracts import FlowContext, FlowDirection, InboundFlow, OutboundFlow
+from .diagnostics import sync_activity
 from .registry import FlowRegistry
 
 
@@ -124,3 +125,20 @@ class FlowEngine:
 		context = self._with_default_options(flow, context)
 		flow.authorize("status")
 		return {"flow": flow.key, **dict(flow.status(context))}
+
+	def configuration(self, flow_key: str, context: FlowContext) -> dict[str, Any]:
+		flow = self.registry.get(flow_key)
+		context = self._with_default_options(flow, context)
+		flow.authorize("configuration")
+		return {"flow": flow.key, **dict(flow.configuration(context))}
+
+	def diagnostics(self, flow_key: str, context: FlowContext, limit: int = 50) -> dict[str, Any]:
+		flow = self.registry.get(flow_key)
+		context = self._with_default_options(flow, context)
+		flow.authorize("diagnostics")
+		limit = min(max(int(limit), 1), 200)
+		return {
+			"flow": flow.key,
+			"activity": sync_activity(flow.key, context, limit),
+			**dict(flow.diagnostics(context, limit)),
+		}

@@ -6,7 +6,7 @@
   "description": "Local Windows control centre for ERPNext and TallyPrime synchronization",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "check": "node --check src/app.js && node scripts/build.mjs --check"
+    "check": "node --check src/app.js && node --check src/operations.js && node scripts/build.mjs --check"
   },
   "engines": {
     "node": ">=18"

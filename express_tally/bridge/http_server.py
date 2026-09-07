@@ -152,6 +152,24 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 			except Exception as exc:
 				self._json(503, {"flows": [], "error": str(exc)})
 			return
+		if path.path == "/api/v1/flow-details":
+			try:
+				query = urllib.parse.parse_qs(path.query)
+				flow = str(query.get("flow", [""])[0])
+				limit = int(query.get("limit", [50])[0])
+				self._json(200, self.server.controller.flow_details(flow, limit))
+			except Exception as exc:
+				self._json(400, {"error": str(exc)})
+			return
+		if path.path == "/api/v1/preview":
+			try:
+				query = urllib.parse.parse_qs(path.query)
+				flow = str(query.get("flow", [""])[0])
+				limit = int(query.get("limit", [20])[0])
+				self._json(200, self.server.controller.preview_flow(flow, limit))
+			except Exception as exc:
+				self._json(400, {"error": str(exc)})
+			return
 		self._serve_static(path.path)
 
 	def do_POST(self):

@@ -116,6 +116,30 @@ class FrappeClient:
 			},
 		)
 
+	def get_flow_configuration(self, config, flow):
+		return self.request(
+			"GET",
+			"/api/method/express_tally.framework.api.get_configuration",
+			self._flow_context(config, flow),
+		)
+
+	def get_flow_diagnostics(self, config, flow, limit=50):
+		return self.request(
+			"GET",
+			"/api/method/express_tally.framework.api.get_diagnostics",
+			{**self._flow_context(config, flow), "limit": limit},
+		)
+
+	@staticmethod
+	def _flow_context(config, flow):
+		return {
+			"flow": flow,
+			"company": config.erpnext_company,
+			"target_id": config.target_id,
+			"tally_company": config.tally_company,
+			"options": json.dumps((config.flow_options or {}).get(flow, {})),
+		}
+
 
 class TallyClient:
 	def __init__(self, url="http://127.0.0.1:9000", timeout=30):

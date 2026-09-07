@@ -1,3 +1,5 @@
+import { initializeOperations } from "./operations.js";
+
 const api = async (path, options = {}) => {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -29,7 +31,7 @@ function toast(message, error = false) {
 function showPage(page) {
   $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.page === page));
   $$(".page").forEach((item) => item.classList.toggle("active", item.dataset.pagePanel === page));
-  $("#page-title").textContent = { overview: "Overview", flows: "Sync flows", history: "History", settings: "Settings" }[page];
+  $("#page-title").textContent = { overview: "Overview", flows: "Sync flows", operations: "Operations", history: "History", settings: "Settings" }[page];
 }
 
 function directionLabel(direction) {
@@ -181,6 +183,15 @@ async function loadFlows(showToast = false) {
 
 async function saveFlows() {
   const enabled = $$(".flow-check:checked").map((input) => input.value);
+  const groups = new Map();
+  enabled.forEach((key) => {
+    const flow = state.flows.find((entry) => entry.key === key);
+    if (!flow?.exclusive_group) return;
+    if (groups.has(flow.exclusive_group)) {
+      throw new Error(`${groups.get(flow.exclusive_group)} and ${flow.title || flow.key} cannot both be enabled.`);
+    }
+    groups.set(flow.exclusive_group, flow.title || flow.key);
+  });
   const response = await api("/api/v1/config", { method: "PUT", body: JSON.stringify({ enabled_flows: enabled, flow_name: "" }) });
   state.config = response.config;
   toast("Enabled flows saved.");
@@ -239,6 +250,7 @@ async function initialize() {
   wireEvents();
   await Promise.all([loadConfig(), loadState()]);
   await Promise.all([loadHealth(), loadFlows()]);
+  initializeOperations({ state, api, toast, escapeHtml, directionLabel, loadConfig, loadState });
   setInterval(loadState, 2000);
   setInterval(loadHealth, 30000);
 }

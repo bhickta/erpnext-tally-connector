@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 
 from .clients import BridgeRequestError
 from .profiles import AgentProfileRegistry
+from .preview import summarize_records
 from .xml_gateway import current_company_request
 
 
@@ -64,6 +65,32 @@ class SyncService:
 		"""Backward-compatible single outbound flow entry point."""
 		flow = self.config.flow_name or next(iter(self.config.selected_flows), "")
 		return self.sync_flow(flow, "erpnext_to_tally", limit=limit)
+
+	def preview_flow(self, flow, direction, agent_profile=None, limit=20, default_options=None):
+		summary = SyncSummary(flow=flow, direction=direction)
+		if not self._check_environment(summary):
+			raise ValueError(summary.error)
+		limit = min(max(int(limit), 1), 100)
+		if direction == "erpnext_to_tally":
+			batch = self.frappe.get_unsynced_documents(self.config, limit=limit, flow=flow)
+			if batch.get("schema_version") != 1:
+				raise ValueError(f"Unsupported Frappe sync schema: {batch.get('schema_version')}")
+			if batch.get("flow") != flow:
+				raise ValueError(f"Unexpected Tally flow: {batch.get('flow')}")
+			records = batch.get("documents") or batch.get("orders") or []
+		elif direction == "tally_to_erpnext":
+			profile = self.profiles.get(agent_profile)
+			if not profile.supports_direction("tally_to_erpnext"):
+				raise ValueError(f"Agent profile {profile.key} does not support Tally to ERPNext")
+			profile.validate_environment(self.tally)
+			options = {
+				**dict(default_options or {}),
+				**dict((self.config.flow_options or {}).get(flow, {})),
+			}
+			records = list(profile.collect(self.config, self.tally, limit, options))
+		else:
+			raise ValueError(f"Unsupported sync direction: {direction}")
+		return {"flow": flow, "direction": direction, "count": len(records), "records": summarize_records(records)}
 
 	def sync_flow(self, flow, direction, agent_profile=None, limit=None, default_options=None):
 		if not self._lock.acquire(blocking=False):

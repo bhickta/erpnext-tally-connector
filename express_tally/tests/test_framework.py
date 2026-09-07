@@ -29,6 +29,12 @@ class ExampleOutboundFlow(OutboundFlow):
 	def status(self, context):
 		return {"pending": 1}
 
+	def configuration(self, context):
+		return {"option_schema": [{"fieldname": "safe", "type": "checkbox"}]}
+
+	def diagnostics(self, context, limit=50):
+		return {"custom": [limit]}
+
 
 class ExampleInboundFlow(InboundFlow):
 	key = "test.inbound"
@@ -124,6 +130,16 @@ class TestFlowEngine(TestCase):
 		first = sync_idempotency_key("outbound", "flow", "target", "SI-1", "v1")
 		self.assertEqual(first, sync_idempotency_key("outbound", "flow", "target", "SI-1", "v1"))
 		self.assertNotEqual(first, sync_idempotency_key("outbound", "flow", "target", "SI-1", "v2"))
+
+	def test_configuration_and_diagnostics_are_dispatched(self):
+		configuration = self.engine.configuration("test.outbound", self.context)
+		with patch("express_tally.framework.engine.sync_activity", return_value=[{"status": "Success"}]):
+			diagnostics = self.engine.diagnostics("test.outbound", self.context, 25)
+
+		self.assertEqual(configuration["option_schema"][0]["fieldname"], "safe")
+		self.assertEqual(diagnostics["activity"], [{"status": "Success"}])
+		self.assertEqual(diagnostics["custom"], [25])
+		self.assertEqual(self.outbound.operations[-2:], ["configuration", "diagnostics"])
 
 	def test_source_can_include_only_previously_synced_cancellations(self):
 		source = SourceSpec("Sales Invoice", "posting_date", include_cancelled_if_synced=True)

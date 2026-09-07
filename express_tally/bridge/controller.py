@@ -123,6 +123,31 @@ class ControlCentre:
 	def flows(self):
 		return self.make_service(require_flows=False).discover_flows()
 
+	def flow_details(self, flow_key, limit=50):
+		service = self.make_service(require_flows=False)
+		flow = next((row for row in service.discover_flows() if row.get("key") == flow_key), None)
+		if not flow:
+			raise ValueError(f"Unknown Tally flow: {flow_key}")
+		return {
+			"flow": flow,
+			"status": service.frappe.get_flow_status(service.config, flow_key),
+			"configuration": service.frappe.get_flow_configuration(service.config, flow_key),
+			"diagnostics": service.frappe.get_flow_diagnostics(service.config, flow_key, limit),
+		}
+
+	def preview_flow(self, flow_key, limit=20):
+		service = self.make_service(require_flows=False)
+		flow = next((row for row in service.discover_flows() if row.get("key") == flow_key), None)
+		if not flow:
+			raise ValueError(f"Unknown Tally flow: {flow_key}")
+		return service.preview_flow(
+			flow_key,
+			flow.get("direction"),
+			flow.get("agent_profile"),
+			limit,
+			flow.get("default_options"),
+		)
+
 	def health(self):
 		result = {
 			"ok": False,

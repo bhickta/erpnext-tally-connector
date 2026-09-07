@@ -64,6 +64,14 @@ class IntegrationFlow(ABC):
 	def status(self, context: FlowContext) -> Mapping[str, Any]:
 		return {}
 
+	def configuration(self, context: FlowContext) -> Mapping[str, Any]:
+		"""Return UI-safe option metadata and selectable values for this flow."""
+		return {}
+
+	def diagnostics(self, context: FlowContext, limit: int = 50) -> Mapping[str, Any]:
+		"""Return flow-specific operational diagnostics."""
+		return {}
+
 
 class OutboundFlow(IntegrationFlow):
 	"""A pull-and-acknowledge flow whose source of truth is ERPNext."""
