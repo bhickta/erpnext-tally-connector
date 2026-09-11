@@ -1,0 +1,43 @@
+name: Deploy Express Tally
+
+on:
+  push:
+    branches: [master, production]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: express-tally-deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref_name == 'master' || github.ref_name == 'production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Configure dedicated deployment SSH key
+        env:
+          DEPLOY_KEY: ${{ secrets.RAPL_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.RAPL_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/express_tally_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/express_tally_deploy ~/.ssh/known_hosts
+      - name: Deploy and verify
+        env:
+          REVISION: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          target=dev
+          if [ "$BRANCH" = production ]; then target=production; fi
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+            -i ~/.ssh/express_tally_deploy ubuntu@13.203.164.108 \
+            "deploy $target $REVISION"
+      - name: Remove deployment key
+        if: always()
+        run: rm -f ~/.ssh/express_tally_deploy
