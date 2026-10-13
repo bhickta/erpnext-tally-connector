@@ -4,7 +4,6 @@ import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 
-
 NON_ALPHANUMERIC = re.compile(r"[^a-zA-Z0-9]+")
 NUMERIC_CHARACTER_REFERENCE = re.compile(r"&#(?:x([0-9a-fA-F]+)|([0-9]+));")
 INVALID_XML_CHARACTER = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
@@ -50,6 +49,8 @@ def build_collection_export(
 	native_fields,
 	filters=(),
 	static_variables=None,
+	formulas=None,
+	computed_fields=None,
 ):
 	"""Build an inline collection export; no TDL/TCP needs to be installed in Tally."""
 	envelope = ET.Element("ENVELOPE")
@@ -66,7 +67,8 @@ def build_collection_export(
 	for name, value in (static_variables or {}).items():
 		if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", str(name)):
 			raise ValueError(f"Invalid Tally static variable: {name}")
-		ET.SubElement(static, str(name).upper()).text = str(value)
+		attributes = {"TYPE": "Date"} if str(name).upper() in {"SVFROMDATE", "SVTODATE"} else {}
+		ET.SubElement(static, str(name).upper(), attributes).text = str(value)
 	tdl = ET.SubElement(description, "TDL")
 	message = ET.SubElement(tdl, "TDLMESSAGE")
 	collection = ET.SubElement(
@@ -77,10 +79,18 @@ def build_collection_export(
 	ET.SubElement(collection, "TYPE").text = object_type
 	for field in native_fields:
 		ET.SubElement(collection, "NATIVEMETHOD").text = field
+	for name, expression in (computed_fields or {}).items():
+		if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", str(name)):
+			raise ValueError(f"Invalid Tally computed field: {name}")
+		ET.SubElement(collection, "COMPUTE").text = f"{name} : {expression}"
 	for index, formula in enumerate(filters, 1):
 		filter_name = f"ETFilter{index}"
 		ET.SubElement(collection, "FILTERS").text = filter_name
 		ET.SubElement(message, "SYSTEM", {"TYPE": "Formulae", "NAME": filter_name}).text = formula
+	for name, formula in (formulas or {}).items():
+		if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", str(name)):
+			raise ValueError(f"Invalid Tally formula name: {name}")
+		ET.SubElement(message, "SYSTEM", {"TYPE": "Formulae", "NAME": name}).text = formula
 	return ET.tostring(envelope, encoding="unicode")
 
 
@@ -89,7 +99,7 @@ def parse_collection_export(payload, record_tags):
 	try:
 		root = ET.fromstring(_clean_tally_xml(payload))
 	except ET.ParseError as exc:
-		raise ValueError(f"Tally returned invalid collection XML: {str(exc)}") from exc
+		raise ValueError(f"Tally returned invalid collection XML: {exc!s}") from exc
 	tags = {normalized_key(tag) for tag in record_tags}
 	records = []
 	for element in root.iter():
@@ -110,10 +120,7 @@ def _element_value(element):
 	values = defaultdict(list)
 	for child in children:
 		values[normalized_key(child.tag)].append(_element_value(child))
-	result = {
-		key: entries[0] if len(entries) == 1 else entries
-		for key, entries in values.items()
-	}
+	result = {key: entries[0] if len(entries) == 1 else entries for key, entries in values.items()}
 	for key, value in element.attrib.items():
 		result[f"_{normalized_key(key)}"] = value
 	return result

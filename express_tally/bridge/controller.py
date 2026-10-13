@@ -13,7 +13,6 @@ from .clients import FrappeClient, TallyClient
 from .config import ConfigStore
 from .service import SyncService
 
-
 LOGGER = logging.getLogger("erpnext_tally_bridge")
 
 
@@ -23,6 +22,9 @@ def utc_now():
 
 def validate_exclusive_flows(flows):
 	owners = {}
+	accounting = [flow for flow in flows if flow.get("accounting_scope")]
+	if len(accounting) > 1 and any(flow.get("accounting_scope") == "all" for flow in accounting):
+		raise ValueError("Full-ledger outbound sync cannot run alongside payment or sales outbound sync")
 	for flow in flows:
 		group = flow.get("exclusive_group")
 		if group and group in owners:

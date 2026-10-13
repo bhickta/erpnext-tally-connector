@@ -9,7 +9,6 @@ from frappe.utils import flt
 
 from express_tally.framework import OutboundFlow, OutboundSyncLog, SourceSpec
 
-
 DEFAULT_SOURCES = (
 	SourceSpec("Sales Order", "transaction_date"),
 	SourceSpec("Delivery Note", "posting_date"),
@@ -178,6 +177,7 @@ class SalesDocumentsToTallyFlow(OutboundFlow):
 	"""Configurable flow using standard submitted ERPNext selling documents."""
 
 	agent_profile = "inventory_sales_voucher_v1"
+	accounting_scope = "sales"
 	source_specs = DEFAULT_SOURCES
 	mapper_class = SalesDocumentMapper
 	include_unscoped_legacy = False

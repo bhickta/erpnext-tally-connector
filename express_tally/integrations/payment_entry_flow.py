@@ -65,7 +65,9 @@ class PaymentEntryMapper:
 		).hexdigest()
 		return payload
 
-	def map_ledger_entries(self, rows, company):
+	def map_ledger_entries(
+		self, rows, company, *, preserve_lines=False, ledger_names=None, party_ledgers=None
+	):
 		entries = {}
 		masters = {}
 		party_ledger = ""
@@ -103,9 +105,15 @@ class PaymentEntryMapper:
 				}.get(account.root_type)
 			if not ledger or not parent:
 				raise ValueError(f"Could not map payment ledger {row['account']}")
+			ledger = (
+				row.get("tally_ledger")
+				or (party_ledgers or {}).get(row.get("party"))
+				or (ledger_names or {}).get(row["account"])
+				or ledger
+			)
 			masters[ledger] = {"name": ledger, "parent": parent, "billwise": bool(row.get("party"))}
 			entry = entries.setdefault(
-				ledger,
+				(ledger, len(entries)) if preserve_lines else ledger,
 				{
 					"ledger": ledger,
 					"amount": Decimal(0),
@@ -142,6 +150,7 @@ class PaymentEntriesToTallyFlow(OutboundFlow):
 	key = PAYMENT_FLOW
 	title = "Payment Entries to Tally"
 	agent_profile = "payment_voucher_v1"
+	accounting_scope = "payments"
 	allowed_roles = frozenset({"Tally Sync User", "Accounts Manager", "System Manager"})
 	source_specs = (
 		SourceSpec(

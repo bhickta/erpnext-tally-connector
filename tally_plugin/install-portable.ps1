@@ -22,7 +22,7 @@ Push-Location $root
 try {
     & $python -m express_tally.bridge self-test
     if ($LASTEXITCODE -ne 0) { throw "Portable bridge self-test failed" }
-    & $python -m unittest express_tally.tests.test_bridge express_tally.tests.test_payments
+    & $python -m unittest express_tally.tests.test_bridge express_tally.tests.test_payments express_tally.tests.test_ledger_bridge
     if ($LASTEXITCODE -ne 0) { throw "Portable bridge regression tests failed" }
 } finally { Pop-Location }
 

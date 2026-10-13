@@ -17,7 +17,15 @@ def ensure_tally_sync_role():
 	# authorized integration inserts the document with ignore_permissions.
 	from frappe.permissions import add_permission, update_permission_property
 
-	for doctype in ("Customer", "Supplier", "Account", "Payment Entry", "Sales Invoice", "Purchase Invoice"):
+	for doctype in (
+		"Customer",
+		"Supplier",
+		"Account",
+		"Payment Entry",
+		"Sales Invoice",
+		"Purchase Invoice",
+		"Journal Entry",
+	):
 		if not frappe.db.exists("DocType", doctype):
 			continue
 		filters = {"parent": doctype, "role": "Tally Sync User", "permlevel": 0, "if_owner": 0}

@@ -30,6 +30,8 @@ class SourceSpec:
 	include_cancelled_if_synced: bool = False
 	sync_once: bool = False
 	exclude_tally_imports: bool = False
+	exclude_other_exports: bool = False
+	exclude_opening: bool = False
 
 	def __post_init__(self):
 		if not DOCTYPE_PATTERN.fullmatch(self.doctype):
@@ -59,7 +61,9 @@ class OutboundSyncLog:
 		if not flow_key or not self.sources:
 			raise ValueError("OutboundSyncLog requires a flow key and at least one source")
 
-	def previous_target_reference(self, source_doctype: str, source_name: str, target_id: str) -> str:
+	def previous_target_reference(
+		self, source_doctype: str, source_name: str, target_id: str, source_reference=None
+	) -> str:
 		import frappe
 
 		self._source(source_doctype)
@@ -71,6 +75,7 @@ class OutboundSyncLog:
 			  AND source_name = %(source_name)s
 			  AND target_id = %(target_id)s
 			  AND status = 'Success'
+			  AND (%(source_reference)s IS NULL OR source_reference = %(source_reference)s)
 			  AND (flow_key = %(flow_key)s
 			       OR (%(include_legacy)s = 1 AND COALESCE(flow_key, '') = ''))
 			ORDER BY creation DESC
@@ -82,6 +87,7 @@ class OutboundSyncLog:
 				"target_id": target_id,
 				"flow_key": self.flow_key,
 				"include_legacy": int(self.include_unscoped_legacy),
+				"source_reference": source_reference,
 			},
 		)
 		return rows[0][0] if rows and rows[0][0] else ""
@@ -163,7 +169,7 @@ class OutboundSyncLog:
 					"operation": operation,
 					"source_system": "ERPNext",
 					"source_type": source_doctype,
-					"source_reference": source_name,
+					"source_reference": result.get("source_reference") or source_name,
 					"source_doctype": source_doctype,
 					"source_name": source_name,
 					"source_modified": result.get("source_modified") or result.get("source_version"),
@@ -272,6 +278,18 @@ class OutboundSyncLog:
 			if source.sync_once
 			else "AND log.source_modified = source.modified"
 		)
+		if source.exclude_other_exports:
+			conditions.append("""NOT EXISTS (
+				SELECT 1 FROM `tabTally Sync Log` other_export
+				WHERE other_export.direction = 'ERPNext to Tally'
+				  AND other_export.status = 'Success'
+				  AND other_export.target_id = %(target_id)s
+				  AND other_export.source_doctype = %(source_doctype)s
+				  AND other_export.source_name = source.name
+				  AND other_export.flow_key != %(flow_key)s
+			)""")
+		if source.exclude_opening:
+			conditions.append("COALESCE(source.is_opening, 'No') != 'Yes'")
 		if from_date:
 			conditions.append(f"source.`{source.date_field}` >= %(from_date)s")
 			values["from_date"] = from_date

@@ -1,9 +1,10 @@
 """Stable contracts implemented by company-specific Tally flows."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 
 class FlowDirection(str, Enum):
@@ -32,6 +33,7 @@ class IntegrationFlow(ABC):
 	schema_version = 1
 	agent_profile = ""
 	exclusive_group = ""
+	accounting_scope = ""
 	allowed_roles = frozenset({"System Manager"})
 	default_options: Mapping[str, Any] = {}
 
@@ -57,6 +59,8 @@ class IntegrationFlow(ABC):
 			metadata["agent_profile"] = self.agent_profile
 		if self.exclusive_group:
 			metadata["exclusive_group"] = self.exclusive_group
+		if self.accounting_scope:
+			metadata["accounting_scope"] = self.accounting_scope
 		if self.default_options:
 			metadata["default_options"] = dict(self.default_options)
 		return metadata

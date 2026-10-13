@@ -6,9 +6,9 @@ from decimal import Decimal
 from .xml_gateway import _amount, _date, _element, _import_envelope, _voucher_attributes, _yes_no
 
 
-def validate_payment(document):
-	if document.get("voucher_type") not in {"Payment", "Receipt", "Contra"}:
-		raise ValueError("Unsupported payment voucher type")
+def validate_accounting_voucher(document):
+	if document.get("voucher_type") not in {"Payment", "Receipt", "Contra", "Journal"}:
+		raise ValueError("Unsupported accounting voucher type")
 	if document.get("operation") not in {"Create", "Alter", "Cancel"}:
 		raise ValueError("Unsupported payment operation")
 	if document["operation"] == "Cancel":
@@ -27,8 +27,19 @@ def validate_payment(document):
 			raise ValueError("Payment bill allocations must match their ledger amount")
 
 
+def validate_payment(document):
+	if document.get("voucher_type") not in {"Payment", "Receipt", "Contra"}:
+		raise ValueError("Unsupported payment voucher type")
+	validate_accounting_voucher(document)
+
+
 def build_payment_import(document, company, target_id):
 	validate_payment(document)
+	return build_accounting_import(document, company, target_id)
+
+
+def build_accounting_import(document, company, target_id):
+	validate_accounting_voucher(document)
 	root, message = _import_envelope("Vouchers", company)
 	attributes, remote_id = _voucher_attributes(document, target_id)
 	voucher = _element(message, "VOUCHER", **attributes)

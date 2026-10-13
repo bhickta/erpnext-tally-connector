@@ -29,7 +29,8 @@ def build(runtime, output):
 			path for path in (repo / "express_tally" / "bridge" / "web").rglob("*") if path.is_file()
 		)
 		files.extend(
-			repo / "express_tally" / "tests" / name for name in ("test_bridge.py", "test_payments.py")
+			repo / "express_tally" / "tests" / name
+			for name in ("test_bridge.py", "test_payments.py", "test_ledger_bridge.py")
 		)
 		files.append(repo / "tally_plugin" / "install-portable.ps1")
 		for path in files:

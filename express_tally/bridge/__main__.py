@@ -69,6 +69,8 @@ def main(argv=None):
 				"tally_ledger_mirror_v1",
 				"payment_voucher_v1",
 				"tally_payment_vouchers_v1",
+				"ledger_master_v1",
+				"general_ledger_voucher_v1",
 			}
 			return 0 if (web_root / "index.html").is_file() and required_profiles <= profiles else 2
 		if command == "serve":

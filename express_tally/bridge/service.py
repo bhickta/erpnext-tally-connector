@@ -4,10 +4,9 @@ import uuid
 from dataclasses import asdict, dataclass
 
 from .clients import BridgeRequestError
-from .profiles import AgentProfileRegistry
 from .preview import summarize_records
+from .profiles import AgentProfileRegistry
 from .xml_gateway import current_company_request
-
 
 LOGGER = logging.getLogger("erpnext_tally_bridge")
 
@@ -206,6 +205,7 @@ class SyncService:
 		result = {
 			"request_id": request_id,
 			"source_name": document["name"],
+			"source_reference": document.get("source_reference") or document["name"],
 			"source_doctype": document.get("source_doctype", ""),
 			"source_modified": document["modified"],
 			"source_version": document["modified"],

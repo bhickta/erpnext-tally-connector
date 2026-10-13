@@ -7,7 +7,14 @@ from copy import deepcopy
 from .clients import BridgeRequestError
 from .collection_gateway import build_collection_export, parse_collection_export, scalar
 from .json_gateway import build_master_imports
-from .payment_gateway import build_payment_import, build_payment_masters, validate_payment
+from .ledger_gateway import build_ledger_import, debit_balance, read_ledger
+from .payment_gateway import (
+	build_accounting_import,
+	build_payment_import,
+	build_payment_masters,
+	validate_accounting_voucher,
+	validate_payment,
+)
 from .xml_gateway import build_voucher_import, function_request, voucher_remote_id
 
 
@@ -85,10 +92,13 @@ class InventorySalesVoucherProfile(AgentProfile):
 
 class PaymentVoucherProfile(AgentProfile):
 	key = "payment_voucher_v1"
+	validate_document = staticmethod(validate_payment)
+	build_document = staticmethod(build_payment_import)
+	prepare_masters = True
 
 	def deliver(self, document, config, tally_client):
 		document = deepcopy(document)
-		validate_payment(document)
+		self.validate_document(document)
 		if document["operation"] == "Create":
 			marker = f"[ExpressTallySource:{voucher_remote_id(document, config.target_id)}]"
 			request = build_collection_export(
@@ -117,20 +127,82 @@ class PaymentVoucherProfile(AgentProfile):
 			document["narration"] = (
 				f"{document.get('narration') or ''}\nOriginal ERPNext date {original_date}"
 			)
-		if document["operation"] != "Cancel" and document.get("masters"):
+		if self.prepare_masters and document["operation"] != "Cancel" and document.get("masters"):
 			result = tally_client.import_json(
 				build_payment_masters(document, config.tally_company), "All Masters", require_change=False
 			)
 			if not result.success:
 				raise BridgeRequestError(result.message or "Tally payment ledger import failed")
 		result = tally_client.import_xml(
-			build_payment_import(document, config.tally_company, config.target_id),
+			self.build_document(document, config.tally_company, config.target_id),
 			require_change=True,
 			allow_ignored=True,
 		)
 		if not result.success:
 			raise BridgeRequestError(result.message or "Tally payment import failed")
 		return result.last_voucher_id or f"guid:{voucher_remote_id(document, config.target_id)}"
+
+
+class GeneralLedgerVoucherProfile(PaymentVoucherProfile):
+	key = "general_ledger_voucher_v1"
+	validate_document = staticmethod(validate_accounting_voucher)
+	build_document = staticmethod(build_accounting_import)
+	prepare_masters = False
+
+
+class LedgerMasterProfile(AgentProfile):
+	key = "ledger_master_v1"
+
+	def deliver(self, document, config, tally_client):
+		from decimal import Decimal
+
+		expected = Decimal(str(document["opening_balance"])).quantize(Decimal("0.01"))
+		if not expected.is_finite():
+			raise BridgeRequestError("Opening balance must be finite")
+		period = {
+			"from_date": document.get("fiscal_year_start"),
+			"to_date": document.get("fiscal_year_start"),
+		}
+		existing = read_ledger(
+			tally_client,
+			config.tally_company,
+			document.get("target_ledger") or document["ledger_name"],
+			**period,
+		)
+		if existing:
+			opening = debit_balance(scalar(existing, "openingbalance", "opening_balance")).quantize(
+				Decimal("0.01")
+			)
+			if opening != expected and not document.get("allow_opening_update"):
+				raise BridgeRequestError(
+					f"Existing Tally ledger opening {opening} differs from ERPNext {expected}; explicit opening-update permission is required"
+				)
+			if (
+				opening == expected
+				and scalar(existing, "name", "_name") == document["ledger_name"]
+				and scalar(existing, "parent") == document["parent"]
+			):
+				return f"ledger:{document['ledger_name']}"
+		result = tally_client.import_xml(
+			build_ledger_import(
+				document,
+				config.tally_company,
+				existing=bool(existing),
+				update_opening=not existing or opening != expected,
+			),
+			require_change=True,
+			allow_ignored=True,
+		)
+		if not result.success:
+			raise BridgeRequestError(result.message or "Tally ledger master import failed")
+		actual = read_ledger(tally_client, config.tally_company, document["ledger_name"], **period)
+		if (
+			not actual
+			or debit_balance(scalar(actual, "openingbalance", "opening_balance")).quantize(Decimal("0.01"))
+			!= expected
+		):
+			raise BridgeRequestError("Tally did not retain the requested ledger opening balance")
+		return f"ledger:{document['ledger_name']}"
 
 
 class AgentProfileRegistry:
@@ -146,6 +218,8 @@ class AgentProfileRegistry:
 		for entry in (
 			InventorySalesVoucherProfile,
 			PaymentVoucherProfile,
+			GeneralLedgerVoucherProfile,
+			LedgerMasterProfile,
 			TallyMastersProfile,
 			TallyPaymentVouchersProfile,
 			TallyVouchersProfile,
