@@ -136,6 +136,31 @@ PAYMENT_VOUCHER_FIELDS = (
 	"AllLedgerEntries.BillAllocations.Amount",
 )
 
+NATIVE_TRANSACTION_FIELDS = (
+	*PAYMENT_VOUCHER_FIELDS,
+	"AllLedgerEntries.BillAllocations.*",
+	"LedgerEntries.LedgerName",
+	"LedgerEntries.Amount",
+	"LedgerEntries.IsDeemedPositive",
+	"LedgerEntries.BillAllocations.*",
+	"AllInventoryEntries.StockItemName",
+	"AllInventoryEntries.ActualQty",
+	"AllInventoryEntries.BilledQty",
+	"AllInventoryEntries.Rate",
+	"AllInventoryEntries.Amount",
+	"AllInventoryEntries.AccountingAllocations.*",
+	"AllInventoryEntries.BatchAllocations.*",
+	"InventoryEntries.StockItemName",
+	"InventoryEntries.ActualQty",
+	"InventoryEntries.BilledQty",
+	"InventoryEntries.Rate",
+	"InventoryEntries.Amount",
+	"InventoryEntries.AccountingAllocations.*",
+	"InventoryEntries.BatchAllocations.*",
+	"IsOptional",
+)
+
+
 LEDGER_BALANCE_FIELDS = (
 	"Name",
 	"Parent",
@@ -356,6 +381,11 @@ class TallyVouchersProfile(IncrementalTallyProfile):
 		# A targeted diagnostic must not skip older, unselected vouchers later.
 		if not getattr(self, "_scoped_collection", False):
 			return super().acknowledge_collected(config, records, results)
+
+
+class TallyNativeTransactionsProfile(TallyVouchersProfile):
+	key = "tally_native_transactions_v1"
+	voucher_fields = NATIVE_TRANSACTION_FIELDS
 
 
 class TallyPaymentVouchersProfile(TallyVouchersProfile):
@@ -687,9 +717,31 @@ def tally_date(value):
 
 def _primary_group(parent, groups):
 	current = str(parent or "").strip()
+	classification_groups = {
+		"sundry debtors",
+		"sundry creditors",
+		"bank accounts",
+		"cash-in-hand",
+		"bank od a/c",
+		"duties & taxes",
+		"stock-in-hand",
+		"sales accounts",
+		"purchase accounts",
+		"direct expenses",
+		"direct incomes",
+		"indirect expenses",
+		"indirect incomes",
+		"fixed assets",
+		"deposits (asset)",
+		"loans & advances (asset)",
+		"secured loans",
+		"unsecured loans",
+	}
 	visited = set()
 	last = current
 	while current and current.casefold() not in visited:
+		if current.casefold() in classification_groups:
+			return current
 		visited.add(current.casefold())
 		last = current
 		group = groups.get(current.casefold())
@@ -798,6 +850,8 @@ def normalize_voucher(raw):
 		raw, "inventory_entries_list"
 	)
 	for entry in raw_inventory_entries:
+		allocations = nested_records(entry, "accounting_allocations_list")
+		batches = nested_records(entry, "batch_allocations_list")
 		inventory_entries.append(
 			{
 				"item": scalar(entry, "stock_item_name", "stockitemname"),
@@ -805,8 +859,19 @@ def normalize_voucher(raw):
 				"billed_qty": scalar(entry, "billed_qty", "billedqty"),
 				"rate": scalar(entry, "rate"),
 				"amount": number(scalar(entry, "amount")),
-				"godown": scalar(entry, "godown_name", "godownname", "batch_allocations_list.godown_name"),
-				"account": scalar(entry, "accounting_allocations_list.ledger_name", "ledger_name"),
+				"godown": scalar(entry, "godown_name", "godownname")
+				or (scalar(batches[0], "godown_name") if batches else ""),
+				"account": scalar(allocations[0], "ledger_name")
+				if allocations
+				else scalar(entry, "ledger_name"),
+				"accounting_allocations": [
+					{"ledger": scalar(row, "ledger_name"), "amount": number(scalar(row, "amount"))}
+					for row in allocations
+					if scalar(row, "ledger_name")
+				],
+				"tracking_numbers": [
+					scalar(row, "tracking_number") for row in batches if scalar(row, "tracking_number")
+				],
 			}
 		)
 	return {
@@ -820,6 +885,7 @@ def normalize_voucher(raw):
 		"reference_date": tally_date(scalar(raw, "reference_date", "referencedate")),
 		"narration": scalar(raw, "narration"),
 		"party_ledger": scalar(raw, "party_ledger_name", "partyledgername"),
+		"optional": scalar(raw, "is_optional", "isoptional").casefold() == "yes",
 		"cancelled": scalar(raw, "is_cancelled", "iscancelled").casefold() == "yes",
 		"deleted": scalar(raw, "is_deleted", "isdeleted").casefold() == "yes",
 		"ledger_entries": [entry for entry in ledger_entries if entry["ledger"]],

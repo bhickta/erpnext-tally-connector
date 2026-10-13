@@ -12,6 +12,7 @@ app_license = "MIT"
 required_apps = ["erpnext"]
 
 tally_integration_flows = [
+	"express_tally.integrations.native_transaction_flow.NativeTransactionsFromTallyFlow",
 	"express_tally.integrations.ledger_flow.LedgerMastersToTallyFlow",
 	"express_tally.integrations.ledger_flow.FullLedgerToTallyFlow",
 	"express_tally.integrations.ledger_flow.FullLedgerFromTallyFlow",

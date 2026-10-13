@@ -131,10 +131,17 @@ def scalar(record, *paths, default=""):
 	for path in paths:
 		value = record
 		for part in path.split("."):
+			if isinstance(value, list):
+				value = value[0] if value else None
 			if not isinstance(value, dict):
 				value = None
 				break
-			value = value.get(part) if part in value else value.get(normalized_key(part))
+			if part in value:
+				value = value[part]
+			else:
+				key = normalized_key(part)
+				matched = next((k for k in value if k.replace("_", "") == key.replace("_", "")), key)
+				value = value.get(matched)
 		if isinstance(value, list):
 			value = value[0] if value else None
 		if isinstance(value, dict):

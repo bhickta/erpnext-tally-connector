@@ -210,6 +210,7 @@ class AgentProfileRegistry:
 		from .inbound_profiles import (
 			TallyLedgerMirrorProfile,
 			TallyMastersProfile,
+			TallyNativeTransactionsProfile,
 			TallyPaymentVouchersProfile,
 			TallyVouchersProfile,
 		)
@@ -221,6 +222,7 @@ class AgentProfileRegistry:
 			GeneralLedgerVoucherProfile,
 			LedgerMasterProfile,
 			TallyMastersProfile,
+			TallyNativeTransactionsProfile,
 			TallyPaymentVouchersProfile,
 			TallyVouchersProfile,
 			TallyLedgerMirrorProfile,
