@@ -4,13 +4,13 @@ import hashlib
 import json
 import uuid
 from collections.abc import Mapping
+from typing import ClassVar
 
 import frappe
 from frappe.utils import now_datetime
 
 from express_tally.framework import InboundFlow
 from express_tally.framework.sync_log import sync_idempotency_key
-
 
 ALLOWED_ROLES = frozenset({"Tally Sync User", "Accounts Manager", "System Manager"})
 SUCCESS_STATUSES = {"success", "already exists", "skipped"}
@@ -46,11 +46,15 @@ class InboundLog:
 	def __init__(self, flow_key):
 		self.flow_key = flow_key
 
+	def voucher_flow_scope(self):
+		keys = ["express_tally.standard_vouchers_from_tally", "express_tally.payments_from_tally"]
+		return ["in", keys] if self.flow_key in keys else self.flow_key
+
 	def previous_success(self, context, record):
 		return frappe.db.get_value(
 			"Tally Sync Log",
 			{
-				"flow_key": self.flow_key,
+				"flow_key": self.voucher_flow_scope(),
 				"direction": "Tally to ERPNext",
 				"target_id": context.target_id,
 				"source_reference": record.get("_tally_key"),
@@ -65,7 +69,7 @@ class InboundLog:
 		return frappe.db.get_value(
 			"Tally Sync Log",
 			{
-				"flow_key": self.flow_key,
+				"flow_key": self.voucher_flow_scope(),
 				"direction": "Tally to ERPNext",
 				"target_id": context.target_id,
 				"source_reference": record.get("_tally_key"),
@@ -169,7 +173,7 @@ class LoggedInboundFlow(InboundFlow):
 					operation = "Alter" if previous_target else "Create"
 			except Exception as exc:
 				frappe.db.rollback(save_point=savepoint)
-				result = _success_result(record, status="Failed", message=str(exc))
+				result = _success_result(record, status="Failed", message=str(exc) or type(exc).__name__)
 				operation = "Alter" if previous_target else "Create"
 			self.sync_log.record(context, record, result, operation=operation)
 			results.append(result)
@@ -179,7 +183,9 @@ class LoggedInboundFlow(InboundFlow):
 		doctype = record.get("_previous_doctype")
 		name = record.get("_previous_name")
 		if not doctype or not name or not frappe.db.exists(doctype, name):
-			return _success_result(record, status="Skipped", message="Cancelled Tally record was not imported")
+			return _success_result(
+				record, status="Skipped", message="Cancelled Tally record was not imported"
+			)
 		doc = frappe.get_doc(doctype, name)
 		if doc.docstatus == 1:
 			doc.cancel()
@@ -299,7 +305,9 @@ class TallyMastersToERPNextFlow(LoggedInboundFlow):
 	def _account(self, context, record):
 		existing = _account_name(context.company, record["name"])
 		if existing:
-			return _success_result(record, "Account", existing, status="Skipped", message="Account already exists")
+			return _success_result(
+				record, "Account", existing, status="Skipped", message="Account already exists"
+			)
 		parent = _account_name(context.company, record.get("parent")) or _fallback_account(
 			context.company, record.get("primary_group")
 		)
@@ -321,7 +329,9 @@ class TallyMastersToERPNextFlow(LoggedInboundFlow):
 			"parent_account": parent,
 			"is_group": int(record.get("kind") == "account_group"),
 		}
-		return self._upsert(record, "Account", {"account_name": record["name"], "company": context.company}, values)
+		return self._upsert(
+			record, "Account", {"account_name": record["name"], "company": context.company}, values
+		)
 
 	def _customer(self, context, record):
 		group = _group_name("Customer Group", "customer_group_name", record.get("parent"))
@@ -376,8 +386,14 @@ class TallyVouchersToERPNextFlow(LoggedInboundFlow):
 	title = "Standard vouchers from Tally"
 	agent_profile = "tally_vouchers_v1"
 	exclusive_group = "tally_accounting_inbound"
+	default_options: ClassVar[dict] = {"excluded_origins": ["express_tally.payment_entries_to_tally"]}
 
 	def apply_record(self, context, record):
+		if any(
+			f"[ExpressTallyOrigin:{origin}]" in str(record.get("narration") or "")
+			for origin in context.options.get("excluded_origins") or []
+		):
+			return _success_result(record, status="Skipped", message="Voucher originated from ERPNext")
 		voucher_type = str(record.get("voucher_type") or "").casefold()
 		if "sales" in voucher_type or "credit note" in voucher_type:
 			return self._invoice(context, record, sales=True, is_return="credit note" in voucher_type)
@@ -389,12 +405,18 @@ class TallyVouchersToERPNextFlow(LoggedInboundFlow):
 			return self._journal(context, record, voucher_type)
 		if "stock journal" in voucher_type:
 			return self._stock_entry(context, record)
-		return _success_result(record, status="Skipped", message=f"Unsupported voucher type: {record.get('voucher_type')}")
+		return _success_result(
+			record, status="Skipped", message=f"Unsupported voucher type: {record.get('voucher_type')}"
+		)
 
 	def _save_document(self, context, record, values):
 		doctype = values["doctype"]
 		previous_name = record.get("_previous_name")
-		if previous_name and record.get("_previous_doctype") == doctype and frappe.db.exists(doctype, previous_name):
+		if (
+			previous_name
+			and record.get("_previous_doctype") == doctype
+			and frappe.db.exists(doctype, previous_name)
+		):
 			doc = frappe.get_doc(doctype, previous_name)
 			if doc.docstatus != 0:
 				raise ValueError(f"Cannot alter submitted ERPNext {doctype} {doc.name}; cancel it first")
@@ -517,27 +539,56 @@ class TallyVouchersToERPNextFlow(LoggedInboundFlow):
 				"posting_date": record.get("date"),
 				"user_remark": record.get("narration"),
 				"accounts": accounts,
-			}
+			},
 		)
 
 	def _payment(self, context, record, voucher_type):
 		payment_type = "Pay" if voucher_type == "payment" else "Receive"
-		party_type = "Supplier" if payment_type == "Pay" else "Customer"
-		party = _party_name(party_type, record.get("party_ledger"))
-		if not party:
-			party_type = "Customer" if party_type == "Supplier" else "Supplier"
-			party = _party_name(party_type, record.get("party_ledger"))
-		if not party:
-			raise ValueError(f"{party_type} not found for Tally ledger {record.get('party_ledger')}")
-		other = next(
-			(entry for entry in record.get("ledger_entries") or [] if entry.get("ledger") != record.get("party_ledger")),
-			None,
-		)
-		bank_account = _account_name(context.company, (other or {}).get("ledger"))
+		entries = record.get("ledger_entries") or []
+		preferred = "Supplier" if payment_type == "Pay" else "Customer"
+		parties = []
+		banks = []
+		other_entries = []
+		for entry in entries:
+			ledger = entry.get("ledger")
+			account = (context.options.get("ledger_accounts") or {}).get(ledger) or _account_name(
+				context.company, ledger
+			)
+			if account and frappe.db.get_value("Account", account, "company") != context.company:
+				raise ValueError(f"Payment account {account} does not belong to {context.company}")
+			account_type = frappe.db.get_value("Account", account, "account_type") if account else ""
+			if account_type in {"Bank", "Cash"}:
+				banks.append((entry, account))
+				continue
+			for party_type in (preferred, "Customer" if preferred == "Supplier" else "Supplier"):
+				party = _party_name(party_type, ledger)
+				if party:
+					parties.append((entry, party_type, party))
+					break
+			else:
+				if not account:
+					raise ValueError(f"Account not found for Tally ledger {ledger}")
+				other_entries.append((entry, account))
+		if len(parties) != 1 or len(banks) != 1:
+			raise ValueError("Payment needs exactly one mapped party ledger and one bank/cash ledger")
+		party_entry, party_type, party = parties[0]
+		bank_entry, bank_account = banks[0]
 		party_account = _party_account(context.company, party_type, party)
 		if not bank_account or not party_account:
 			raise ValueError("Could not resolve the party and bank/cash accounts for this payment")
-		amount = max((abs(_number(entry.get("amount"))) for entry in record.get("ledger_entries") or []), default=0)
+		company_currency = frappe.db.get_value("Company", context.company, "default_currency")
+		for account in (bank_account, party_account):
+			currency = frappe.db.get_value("Account", account, "account_currency") or company_currency
+			if currency != company_currency:
+				raise ValueError("Inbound payments require bank and party accounts in the company currency")
+		party_amount = _number(party_entry.get("amount"))
+		bank_amount = _number(bank_entry.get("amount"))
+		if abs(sum(_number(e.get("amount")) for e in entries)) > 0.005:
+			raise ValueError("Tally payment ledger entries do not balance")
+		if (payment_type == "Pay" and (party_amount >= 0 or bank_amount <= 0)) or (
+			payment_type == "Receive" and (party_amount <= 0 or bank_amount >= 0)
+		):
+			raise ValueError("Tally payment ledger signs do not match its voucher type")
 		values = {
 			"doctype": "Payment Entry",
 			"payment_type": payment_type,
@@ -547,12 +598,47 @@ class TallyVouchersToERPNextFlow(LoggedInboundFlow):
 			"party": party,
 			"paid_from": bank_account if payment_type == "Pay" else party_account,
 			"paid_to": party_account if payment_type == "Pay" else bank_account,
-			"paid_amount": amount,
-			"received_amount": amount,
+			"paid_amount": abs(bank_amount if payment_type == "Pay" else party_amount),
+			"received_amount": abs(party_amount if payment_type == "Pay" else bank_amount),
+			"source_exchange_rate": 1,
+			"target_exchange_rate": 1,
+			"deductions": [
+				{
+					"account": account,
+					"amount": -_number(entry.get("amount")),
+					"cost_center": frappe.db.get_value("Company", context.company, "cost_center"),
+				}
+				for entry, account in other_entries
+			],
 			"reference_no": record.get("reference") or record.get("voucher_number"),
 			"reference_date": record.get("reference_date") or record.get("date"),
 			"remarks": record.get("narration"),
 		}
+		if frappe.get_meta("Payment Entry").has_field("branch"):
+			values["branch"] = context.options.get("branch")
+			if frappe.get_meta("Payment Entry").get_field("branch").reqd and not values["branch"]:
+				raise ValueError("Configure the inbound payment flow's branch option")
+		references = []
+		invoice_doctype = "Sales Invoice" if party_type == "Customer" else "Purchase Invoice"
+		for bill in party_entry.get("bill_allocations") or []:
+			bill_type = bill.get("billtype") or bill.get("bill_type") or ""
+			if str(bill_type).casefold() not in {"agst ref", "against ref"}:
+				continue
+			bill_name = bill.get("name") or ""
+			invoice = (context.options.get("invoice_references") or {}).get(bill_name) or bill_name
+			if not invoice or not frappe.db.exists(
+				invoice_doctype, {"name": invoice, "company": context.company, "docstatus": 1}
+			):
+				raise ValueError(f"Map Tally bill reference {bill_name} to a submitted {invoice_doctype}")
+			references.append(
+				{
+					"reference_doctype": invoice_doctype,
+					"reference_name": invoice,
+					"allocated_amount": abs(_number(bill.get("amount"))),
+				}
+			)
+		if references:
+			values["references"] = references
 		return self._save_document(context, record, values)
 
 	def _stock_entry(self, context, record):
@@ -581,8 +667,32 @@ class TallyVouchersToERPNextFlow(LoggedInboundFlow):
 				"posting_date": record.get("date"),
 				"remarks": record.get("narration"),
 				"items": items,
-			}
+			},
 		)
+
+
+class TallyPaymentsToERPNextFlow(TallyVouchersToERPNextFlow):
+	key = "express_tally.payments_from_tally"
+	title = "Payment Entries from Tally"
+	agent_profile = "tally_payment_vouchers_v1"
+
+	def apply_record(self, context, record):
+		if str(record.get("voucher_type") or "").casefold() not in {"payment", "receipt"}:
+			return _success_result(record, status="Skipped", message="Not a payment or receipt voucher")
+		return super().apply_record(context, record)
+
+	def configuration(self, context):
+		schema = [{"fieldname": "submit_documents", "label": "Submit imported payments", "type": "checkbox"}]
+		if frappe.get_meta("Payment Entry").has_field("branch"):
+			schema.append(
+				{
+					"fieldname": "branch",
+					"label": "Branch",
+					"type": "select",
+					"options": frappe.get_all("Branch", pluck="name", order_by="name"),
+				}
+			)
+		return {"option_schema": schema}
 
 
 def _valid_values(doctype, values):
@@ -719,7 +829,9 @@ def _create_party_contact_and_address(party_type, party, record):
 			{
 				"doctype": "Contact",
 				"first_name": record.get("name"),
-				"email_ids": ([{"email_id": record["email"], "is_primary": 1}] if record.get("email") else []),
+				"email_ids": (
+					[{"email_id": record["email"], "is_primary": 1}] if record.get("email") else []
+				),
 				"phone_nos": [
 					{"phone": phone, "is_primary_mobile_no": int(index == 0)}
 					for index, phone in enumerate(filter(None, (record.get("mobile"), record.get("phone"))))

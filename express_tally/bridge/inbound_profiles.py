@@ -16,7 +16,6 @@ from .collection_gateway import (
 )
 from .profiles import AgentProfile
 
-
 MASTER_COLLECTIONS = (
 	(
 		"unit",
@@ -114,6 +113,27 @@ VOUCHER_FIELDS = (
 	"LedgerEntries.*",
 	"AllInventoryEntries.*",
 	"InventoryEntries.*",
+)
+
+PAYMENT_VOUCHER_FIELDS = (
+	"MasterID",
+	"AlterID",
+	"GUID",
+	"VoucherNumber",
+	"VoucherTypeName",
+	"Date",
+	"Reference",
+	"ReferenceDate",
+	"Narration",
+	"PartyLedgerName",
+	"IsCancelled",
+	"IsDeleted",
+	"AllLedgerEntries.LedgerName",
+	"AllLedgerEntries.Amount",
+	"AllLedgerEntries.IsDeemedPositive",
+	"AllLedgerEntries.BillAllocations.Name",
+	"AllLedgerEntries.BillAllocations.BillType",
+	"AllLedgerEntries.BillAllocations.Amount",
 )
 
 LEDGER_BALANCE_FIELDS = (
@@ -259,10 +279,38 @@ class TallyMastersProfile(IncrementalTallyProfile):
 
 class TallyVouchersProfile(IncrementalTallyProfile):
 	key = "tally_vouchers_v1"
+	voucher_fields = VOUCHER_FIELDS
 
 	def collect(self, config, tally_client, limit, options=None):
-		checkpoint = self._checkpoint_store(config).get(self._target_key(config), "voucher")
+		options = options or {}
+		self._scoped_collection = bool(options.get("voucher_ids") or options.get("voucher_numbers"))
+		checkpoint = (
+			0
+			if self._scoped_collection
+			else self._checkpoint_store(config).get(self._target_key(config), "voucher")
+		)
 		filters = [f"$AlterID > {checkpoint}"] if checkpoint else []
+		voucher_ids = options.get("voucher_ids")
+		if voucher_ids is not None:
+			if (
+				not isinstance(voucher_ids, list)
+				or not voucher_ids
+				or len(voucher_ids) > 100
+				or any(not str(value).isdigit() or int(value) < 1 for value in voucher_ids)
+			):
+				raise ValueError("voucher_ids must contain between 1 and 100 positive Tally master IDs")
+			filters.append(" OR ".join(f"($MasterID = {int(value)})" for value in voucher_ids))
+		for option, method in (("voucher_types", "$VoucherTypeName"), ("voucher_numbers", "$VoucherNumber")):
+			values = options.get(option)
+			if values is not None:
+				if (
+					not isinstance(values, list)
+					or not values
+					or len(values) > 100
+					or any(not isinstance(v, str) or not v for v in values)
+				):
+					raise ValueError(f"{option} must contain between 1 and 100 nonempty strings")
+				filters.append(" OR ".join(f"({method} = {json.dumps(v)})" for v in values))
 		if config.from_date:
 			filters.append(f"$Date >= $$Date:{config.from_date.replace('-', '')}")
 		if config.to_date:
@@ -271,13 +319,40 @@ class TallyVouchersProfile(IncrementalTallyProfile):
 			config.tally_company,
 			"ETControlCentreVouchers",
 			"Voucher",
-			VOUCHER_FIELDS,
+			self.voucher_fields,
 			filters,
+			static_variables={
+				key: value.replace("-", "")
+				for key, value in (("SVFROMDATE", config.from_date), ("SVTODATE", config.to_date))
+				if value
+			},
 		)
 		response = tally_client.export_collection(request)
 		raw_records = parse_collection_export(response, ("VOUCHER",))
 		records = [normalize_voucher(record) for record in raw_records]
 		return self._pending(config, [record for record in records if record], limit)
+
+	def _pending(self, config, records, limit):
+		if getattr(self, "_scoped_collection", False):
+			return sorted(records, key=lambda record: record.get("_tally_alter_id", 0))[:limit]
+		return super()._pending(config, records, limit)
+
+	def acknowledge_collected(self, config, records, results):
+		# A targeted diagnostic must not skip older, unselected vouchers later.
+		if not getattr(self, "_scoped_collection", False):
+			return super().acknowledge_collected(config, records, results)
+
+
+class TallyPaymentVouchersProfile(TallyVouchersProfile):
+	key = "tally_payment_vouchers_v1"
+	voucher_fields = PAYMENT_VOUCHER_FIELDS
+
+	def _target_key(self, config):
+		return f"{super()._target_key(config)}:payments"
+
+	def collect(self, config, tally_client, limit, options=None):
+		options = {**(options or {}), "voucher_types": ["Payment", "Receipt"]}
+		return super().collect(config, tally_client, limit, options)
 
 
 class TallyLedgerMirrorProfile(IncrementalTallyProfile):
@@ -416,9 +491,7 @@ class TallyLedgerMirrorProfile(IncrementalTallyProfile):
 			f"$Date >= $$Date:{from_date.replace('-', '')}",
 			f"$Date <= $$Date:{to_date.replace('-', '')}",
 		]
-		checkpoint = self._checkpoint_store(config).get(
-			self._target_key(config), "ledger_mirror_voucher"
-		)
+		checkpoint = self._checkpoint_store(config).get(self._target_key(config), "ledger_mirror_voucher")
 		if checkpoint:
 			filters.append(f"$AlterID > {checkpoint}")
 		if not options.get("include_optional_vouchers"):

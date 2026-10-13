@@ -44,7 +44,7 @@ jobs:
         run: npm --prefix control-centre ci && npm --prefix control-centre run build
 
       - name: Run bridge tests
-        run: python -m unittest express_tally.tests.test_bridge
+        run: python -m unittest express_tally.tests.test_bridge express_tally.tests.test_payments
 
       - name: Build standalone executable and package
         shell: powershell

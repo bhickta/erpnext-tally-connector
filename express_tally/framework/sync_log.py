@@ -2,12 +2,12 @@
 
 import hashlib
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .contracts import FlowContext
 from .engine import parse_sequence
-
 
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 DOCTYPE_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9 _-]*$")
@@ -29,6 +29,7 @@ class SourceSpec:
 	submitted_only: bool = True
 	include_cancelled_if_synced: bool = False
 	sync_once: bool = False
+	exclude_tally_imports: bool = False
 
 	def __post_init__(self):
 		if not DOCTYPE_PATTERN.fullmatch(self.doctype):
@@ -94,6 +95,7 @@ class OutboundSyncLog:
 		from_date: str | None = None,
 		to_date: str | None = None,
 		source_doctypes: Sequence[str] | None = None,
+		source_names: Sequence[str] | None = None,
 	) -> list[tuple[str, str, str]]:
 		"""Return globally date-sorted ``(date, doctype, name)`` references."""
 		selected = source_doctypes or tuple(self.sources)
@@ -101,7 +103,7 @@ class OutboundSyncLog:
 		for source_doctype in selected:
 			refs.extend(
 				self._pending_for_source(
-					self._source(source_doctype), company, target_id, limit, from_date, to_date
+					self._source(source_doctype), company, target_id, limit, from_date, to_date, source_names
 				)
 			)
 		return sorted(refs)[:limit]
@@ -131,12 +133,8 @@ class OutboundSyncLog:
 				source_doctype, source_name, self._source(source_doctype).company_field
 			)
 			if source_company != context.company:
-				raise ValueError(
-					f"{source_doctype} {source_name} does not belong to {context.company}"
-				)
-			target_reference = str(
-				result.get("target_reference") or result.get("tally_voucher_id") or ""
-			)
+				raise ValueError(f"{source_doctype} {source_name} does not belong to {context.company}")
+			target_reference = str(result.get("target_reference") or result.get("tally_voucher_id") or "")
 			if status == "Success" and not target_reference:
 				raise ValueError("A successful Tally result requires a target_reference")
 			idempotency_key = None
@@ -186,7 +184,11 @@ class OutboundSyncLog:
 		import frappe
 
 		pending_by_doctype = {
-			doctype: len(self.pending_references(context.company, context.target_id, 100000, source_doctypes=(doctype,)))
+			doctype: len(
+				self.pending_references(
+					context.company, context.target_id, 100000, source_doctypes=(doctype,)
+				)
+			)
 			for doctype in self.sources
 		}
 		counts = dict(
@@ -215,7 +217,7 @@ class OutboundSyncLog:
 			"failed": counts.get("Failed", 0),
 		}
 
-	def _pending_for_source(self, source, company, target_id, limit, from_date, to_date):
+	def _pending_for_source(self, source, company, target_id, limit, from_date, to_date, source_names=None):
 		import frappe
 
 		conditions = [
@@ -249,6 +251,19 @@ class OutboundSyncLog:
 			"include_legacy": int(self.include_unscoped_legacy),
 			"limit": limit,
 		}
+		if source_names is not None:
+			if not source_names:
+				return []
+			conditions.append("source.name IN %(source_names)s")
+			values["source_names"] = tuple(source_names)
+		if source.exclude_tally_imports:
+			conditions.append("""NOT EXISTS (
+				SELECT 1 FROM `tabTally Sync Log` inbound
+				WHERE inbound.direction = 'Tally to ERPNext'
+				  AND inbound.status = 'Success'
+				  AND inbound.source_doctype = %(source_doctype)s
+				  AND inbound.target_reference = source.name
+			)""")
 		version_match = (
 			"""AND (
 				(source.docstatus = 2 AND log.operation = 'Cancel')
@@ -275,7 +290,7 @@ class OutboundSyncLog:
 			 AND log.status = 'Success'
 			 AND (log.flow_key = %(flow_key)s
 			      OR (%(include_legacy)s = 1 AND COALESCE(log.flow_key, '') = ''))
-			WHERE {' AND '.join(conditions)}
+			WHERE {" AND ".join(conditions)}
 			ORDER BY source.`{source.date_field}`, source.name
 			LIMIT %(limit)s
 			""",

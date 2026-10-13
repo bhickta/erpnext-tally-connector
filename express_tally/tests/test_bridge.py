@@ -250,6 +250,26 @@ class TestTallyXMLVoucherGateway(TestCase):
 
 
 class TestTallyCollectionGateway(TestCase):
+	def test_collection_parser_removes_invalid_tally_control_references(self):
+		payload = (
+			"<ENVELOPE><GROUP><NAME>A&#4;B&#x04;C\x04D</NAME>"
+			"<PARENT>Valid&#9;Tab</PARENT></GROUP></ENVELOPE>"
+		)
+		record = parse_collection_export(payload, ("GROUP",))[0]
+
+		self.assertEqual(record["name"], "ABCD")
+		self.assertEqual(record["parent"], "Valid\tTab")
+
+	def test_collection_parser_accepts_undeclared_tally_udf_tags(self):
+		payload = (
+			"<ENVELOPE><VOUCHER><UDF:_UDF_123.LIST>"
+			"<UDF:_UDF_123>Value</UDF:_UDF_123>"
+			"</UDF:_UDF_123.LIST></VOUCHER></ENVELOPE>"
+		)
+		record = parse_collection_export(payload, ("VOUCHER",))[0]
+
+		self.assertEqual(record["udf_udf_123_list"]["udf_udf_123"], "Value")
+
 	def test_built_in_registry_supports_both_sync_directions(self):
 		profiles = {profile["key"]: profile for profile in AgentProfileRegistry().metadata()}
 

@@ -5,7 +5,9 @@ import inspect
 from copy import deepcopy
 
 from .clients import BridgeRequestError
+from .collection_gateway import build_collection_export, parse_collection_export, scalar
 from .json_gateway import build_master_imports
+from .payment_gateway import build_payment_import, build_payment_masters, validate_payment
 from .xml_gateway import build_voucher_import, function_request, voucher_remote_id
 
 
@@ -55,12 +57,12 @@ class InventorySalesVoucherProfile(AgentProfile):
 			document["transaction_date"] = config.voucher_date_override
 			source_type = document.get("source_doctype", "Sales Order")
 			date_note = f"ERPNext {source_type} {document['name']}; original date {original_date}"
-			document["narration"] = "\n".join(
-				part for part in (document.get("narration"), date_note) if part
-			)
+			document["narration"] = "\n".join(part for part in (document.get("narration"), date_note) if part)
 
-		master_payloads = () if document.get("operation") == "Cancel" else build_master_imports(
-			document, config.tally_company
+		master_payloads = (
+			()
+			if document.get("operation") == "Cancel"
+			else build_master_imports(document, config.tally_company)
 		)
 		for master_payload in master_payloads:
 			master_result = tally_client.import_json(
@@ -81,18 +83,71 @@ class InventorySalesVoucherProfile(AgentProfile):
 		return voucher_result.last_voucher_id or f"guid:{voucher_remote_id(document, config.target_id)}"
 
 
+class PaymentVoucherProfile(AgentProfile):
+	key = "payment_voucher_v1"
+
+	def deliver(self, document, config, tally_client):
+		document = deepcopy(document)
+		validate_payment(document)
+		if document["operation"] == "Create":
+			marker = f"[ExpressTallySource:{voucher_remote_id(document, config.target_id)}]"
+			request = build_collection_export(
+				config.tally_company,
+				"ETPaymentSourceIdentity",
+				"Voucher",
+				("MasterID", "GUID", "IsCancelled"),
+				[f'$Narration Contains "{marker}"'],
+			)
+			existing = [
+				row
+				for row in parse_collection_export(tally_client.export_collection(request), ("VOUCHER",))
+				if scalar(row, "masterid", "master_id")
+			]
+			if len(existing) > 1:
+				raise BridgeRequestError("Multiple Tally vouchers have this ERPNext payment identity")
+			if existing:
+				if scalar(existing[0], "iscancelled", "is_cancelled").casefold() == "yes":
+					raise BridgeRequestError(
+						"The ERPNext payment already exists as a cancelled Tally voucher"
+					)
+				return scalar(existing[0], "masterid", "master_id")
+		if config.voucher_date_override:
+			original_date = document["transaction_date"]
+			document["transaction_date"] = config.voucher_date_override
+			document["narration"] = (
+				f"{document.get('narration') or ''}\nOriginal ERPNext date {original_date}"
+			)
+		if document["operation"] != "Cancel" and document.get("masters"):
+			result = tally_client.import_json(
+				build_payment_masters(document, config.tally_company), "All Masters", require_change=False
+			)
+			if not result.success:
+				raise BridgeRequestError(result.message or "Tally payment ledger import failed")
+		result = tally_client.import_xml(
+			build_payment_import(document, config.tally_company, config.target_id),
+			require_change=True,
+			allow_ignored=True,
+		)
+		if not result.success:
+			raise BridgeRequestError(result.message or "Tally payment import failed")
+		return result.last_voucher_id or f"guid:{voucher_remote_id(document, config.target_id)}"
+
+
 class AgentProfileRegistry:
 	def __init__(self, entries=()):
 		from .inbound_profiles import (
 			TallyLedgerMirrorProfile,
 			TallyMastersProfile,
+			TallyPaymentVouchersProfile,
 			TallyVouchersProfile,
 		)
 
 		self._profiles = {}
 		for entry in (
 			InventorySalesVoucherProfile,
+			PaymentVoucherProfile,
 			TallyMastersProfile,
+			TallyPaymentVouchersProfile,
 			TallyVouchersProfile,
 			TallyLedgerMirrorProfile,
 			*entries,

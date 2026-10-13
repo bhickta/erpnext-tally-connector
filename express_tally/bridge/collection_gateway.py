@@ -6,6 +6,32 @@ from collections import defaultdict
 
 
 NON_ALPHANUMERIC = re.compile(r"[^a-zA-Z0-9]+")
+NUMERIC_CHARACTER_REFERENCE = re.compile(r"&#(?:x([0-9a-fA-F]+)|([0-9]+));")
+INVALID_XML_CHARACTER = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+UNDECLARED_UDF_TAG = re.compile(r"(<\s*/?\s*)UDF:")
+
+
+def _valid_xml_character(codepoint):
+	return (
+		codepoint in (9, 10, 13)
+		or 32 <= codepoint <= 0xD7FF
+		or 0xE000 <= codepoint <= 0xFFFD
+		or 0x10000 <= codepoint <= 0x10FFFF
+	)
+
+
+def _clean_tally_xml(payload):
+	# Tally can emit its reserved-name marker as either a raw control character
+	# or a numeric reference. Both are invalid in XML 1.0. Some exports also
+	# contain UDF-prefixed tags without declaring an XML namespace.
+	payload = INVALID_XML_CHARACTER.sub("", payload)
+	payload = UNDECLARED_UDF_TAG.sub(r"\1UDF_", payload)
+
+	def valid_reference(match):
+		codepoint = int(match.group(1), 16) if match.group(1) else int(match.group(2))
+		return match.group(0) if _valid_xml_character(codepoint) else ""
+
+	return NUMERIC_CHARACTER_REFERENCE.sub(valid_reference, payload)
 
 
 def xml_tag(value):
@@ -61,7 +87,7 @@ def build_collection_export(
 def parse_collection_export(payload, record_tags):
 	"""Parse Tally's collection XML while retaining repeated nested entries."""
 	try:
-		root = ET.fromstring(payload.replace("\x04", ""))
+		root = ET.fromstring(_clean_tally_xml(payload))
 	except ET.ParseError as exc:
 		raise ValueError(f"Tally returned invalid collection XML: {str(exc)}") from exc
 	tags = {normalized_key(tag) for tag in record_tags}

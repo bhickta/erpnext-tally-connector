@@ -12,9 +12,15 @@ app_license = "MIT"
 required_apps = ["erpnext"]
 
 tally_integration_flows = [
+	"express_tally.integrations.payment_entry_flow.PaymentEntriesToTallyFlow",
+	"express_tally.integrations.tally_inbound_flows.TallyPaymentsToERPNextFlow",
 	"express_tally.integrations.tally_inbound_flows.TallyMastersToERPNextFlow",
 	"express_tally.integrations.tally_inbound_flows.TallyVouchersToERPNextFlow",
 ]
+
+# Audit records retain historical document names after a source is cancelled
+# or an imported draft is removed; they must not block that lifecycle.
+ignore_links_on_delete = ["Tally Sync Log"]
 
 # Includes in <head>
 # ------------------
