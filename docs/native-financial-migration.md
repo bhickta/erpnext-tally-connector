@@ -44,6 +44,13 @@ publish that directory or its `bridge-config-private.json`.
    zero differences for every mapped posted financial ledger. Review ERP balances
    outside the source mappings, source snapshot coverage and bill-reference review.
    Preserve final stock counts/totals and a recovery snapshot before cutover.
+8. Run `set_migrated_party_accounts.py` after complete verification. It sets
+   standard Customer/Supplier company account defaults and checks ERPNext's own
+   account resolver for every mapped party. For multiple source ledger aliases it
+   preserves a mapped current default, then prefers the normal balance-sheet root,
+   an embedded ERP party ID and the most-used source ledger. All historical alias
+   accounts and their balances remain intact. The prior defaults and selected
+   accounts are saved in `migrated-party-defaults.json`; preserve an updated backup.
 
 ## Reporting boundaries
 
