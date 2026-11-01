@@ -33,7 +33,16 @@ fi
 git -C "$app" fetch https://github.com/bhickta/erpnext-tally-connector.git "$branch"
 [[ $(git -C "$app" rev-parse FETCH_HEAD) == "$revision" ]] || { echo 'Refusing an outdated deployment'; exit 1; }
 echo "Deploying $revision to $site"
-bench --site "$site" backup
+backup_attempt=1
+until bench --site "$site" backup; do
+    if (( backup_attempt >= 3 )); then
+        echo "Backup failed after $backup_attempt attempts; refusing to deploy" >&2
+        exit 1
+    fi
+    echo "Backup attempt $backup_attempt failed; retrying in 30 seconds" >&2
+    backup_attempt=$((backup_attempt + 1))
+    sleep 30
+done
 if git -C "$app" rev-parse --verify HEAD >/dev/null 2>&1; then
     git -C "$app" rev-parse HEAD > "sites/$site/private/express-tally-previous-revision"
 fi
