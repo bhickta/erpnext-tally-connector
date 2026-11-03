@@ -55,6 +55,12 @@ function renderResults(result) {
     return;
   }
   if (lastRun) lastRun.textContent = formatTime(result.at);
+  const skipped = result.skipped || [];
+  const skippedNote = skipped.length
+    ? `<div class="alert">${skipped.length} duplicate master name(s) skipped. ${dependencies.escapeHtml(
+        skipped.slice(0, 3).map((row) => `${row.master}: ${row.name}`).join(", "),
+      )}${skipped.length > 3 ? "…" : ""}</div>`
+    : "";
   const rows = result.results.map((row) => {
     const statusClass = row.status === "Success" ? "result-ok" : "result-error";
     return `<tr>
@@ -67,7 +73,7 @@ function renderResults(result) {
       <td class="error-text">${dependencies.escapeHtml(row.message || "")}</td>
     </tr>`;
   }).join("");
-  container.innerHTML = `<div class="table-scroll"><table class="history-table">
+  container.innerHTML = `${skippedNote}<div class="table-scroll"><table class="history-table">
     <thead><tr><th>Batch</th><th>Status</th><th>Created</th><th>Altered</th><th>Ignored</th><th>Errors</th><th>Message</th></tr></thead>
     <tbody>${rows}</tbody>
   </table></div>`;
@@ -105,6 +111,7 @@ async function syncMasters() {
         include_disabled: $("#masters-include-disabled")?.checked || false,
         include_opening_balances: $("#masters-include-openings")?.checked || false,
         limit: Number($("#masters-limit")?.value) || null,
+        duplicate_names: $("#masters-duplicate-names")?.value || "skip",
       }),
     });
     renderResults({ at: new Date().toISOString(), ...result });

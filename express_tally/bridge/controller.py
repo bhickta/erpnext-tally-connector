@@ -158,6 +158,7 @@ class ControlCentre:
 		include_disabled=False,
 		include_opening_balances=False,
 		limit=None,
+		duplicate_names="skip",
 	):
 		if not self._masters_lock.acquire(blocking=False):
 			raise ValueError("A masters sync is already running")
@@ -167,12 +168,15 @@ class ControlCentre:
 				include_disabled=include_disabled,
 				include_opening_balances=include_opening_balances,
 				limit=limit,
+				duplicate_names=duplicate_names,
 			)
 			with self._state_lock:
 				self._last_masters_result = {
 					"at": utc_now(),
 					"ok": result.get("ok"),
 					"masters": result.get("masters"),
+					"duplicate_names": result.get("duplicate_names"),
+					"skipped": result.get("skipped"),
 					"results": result.get("results"),
 				}
 			return result

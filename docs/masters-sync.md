@@ -25,7 +25,7 @@ the remaining names are aliases.
 
 | Master | Tally name | Alias values |
 | --- | --- | --- |
-| Item | ERPNext `item_code` | `ERPNext:Item:<name>`, then `item_name` when different |
+| Item | ERPNext `item_name` (or `item_code` when blank) | item `item_code`, then `ERPNext:Item:<item_code>` |
 | Warehouse | `warehouse_name` without the company abbreviation | raw ERPNext `name`, then `ERPNext:Warehouse:<name>` |
 | Customer | `customer_name` | raw ERPNext `name` when different, then `ERPNext:Customer:<name>` |
 | Supplier | `supplier_name` | raw ERPNext `name` when different, then `ERPNext:Supplier:<name>` |
@@ -35,11 +35,22 @@ raw alias is omitted only when it would duplicate the Tally master name; the
 namespaced alias is always present, so a Tally record can always be mapped
 back to its ERPNext document.
 
+Existing Tally stock items are normally named by the ERPNext item name, not by
+the item code, so the item master name follows that convention.
+
+Duplicate display names are resolved as follows:
+
+- **Items:** every colliding item is named `<item_name> (<item_code>)`, so all
+  items remain distinct.
+- **Parties and warehouses:** choose `duplicate_names=skip` to keep the first
+  record and report the rest, or `duplicate_names=suffix` to append the
+  ERPNext ID to every colliding record. `skip` is the default.
+
 ## Field mapping
 
 ### Item → Stock Item
 
-- `name`: `item_code`
+- `name`: `item_name`, or `<item_name> (<item_code>)` when the name is not unique
 - `parent`: ERPNext item group name; `All Item Groups` becomes Tally Primary
 - `base units`: `stock_uom`
 - `description`: `description` with HTML removed, falling back to `item_name`
@@ -65,7 +76,8 @@ back to its ERPNext document.
 
 - `name`: `warehouse_name` with the company abbreviation removed
 - `parent`: `parent_warehouse` with the company abbreviation removed;
-  the root becomes Tally Primary
+  the root and `All Warehouses` become Tally Primary
+- the `All Warehouses` root group itself is not imported
 - aliases: raw `name` and `ERPNext:Warehouse:<name>`
 
 ### Customer / Supplier → Ledger
@@ -128,12 +140,14 @@ Example body:
   "masters": ["Item", "Warehouse", "Customer", "Supplier"],
   "include_disabled": false,
   "include_opening_balances": false,
-  "limit": null
+  "limit": null,
+  "duplicate_names": "skip"
 }
 ```
 
 `limit` is optional and applies to the warehouse, customer, supplier, and
 item batches. Dependency units and item groups are always complete.
+`duplicate_names` accepts `skip` or `suffix`.
 
 The bridge calls these Frappe methods:
 

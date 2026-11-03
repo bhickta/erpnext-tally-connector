@@ -213,6 +213,7 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 						include_disabled=bool(body.get("include_disabled")),
 						include_opening_balances=bool(body.get("include_opening_balances")),
 						limit=body.get("limit"),
+						duplicate_names=body.get("duplicate_names", "skip"),
 					),
 				)
 				return

@@ -84,7 +84,11 @@ class TestTallyJSONGateway(TestCase):
 		self.assertEqual(unit["metadata"]["action"], "create")
 		self.assertEqual(unit["originalname"], "Numbers")
 		self.assertEqual(requests[1]["tallymessage"][-1]["metadata"]["type"], "Ledger")
-		self.assertEqual(requests[2]["tallymessage"][0]["metadata"]["type"], "Stock Item")
+		stock_item = requests[2]["tallymessage"][0]
+		self.assertEqual(stock_item["metadata"]["type"], "Stock Item")
+		self.assertEqual(stock_item["name"], "Item One")
+		self.assertEqual(stock_item["partno"], "ITEM-1")
+		self.assertIn("ERPNext:Item:ITEM-1", stock_item["language name"][0]["name"])
 
 	def test_voucher_contains_balanced_order_and_inventory_details(self):
 		request = build_voucher_import(sample_order(), "Test Company", "target-1")
@@ -98,6 +102,7 @@ class TestTallyJSONGateway(TestCase):
 		self.assertEqual(voucher["date"], "20260828")
 		self.assertEqual(voucher["ledgerentries"][0]["amount"], "-295.00")
 		inventory = voucher["allinventoryentries"][0]
+		self.assertEqual(inventory["stockitemname"], "Item One")
 		self.assertEqual(inventory["actualqty"], " 2 Nos")
 		self.assertEqual(inventory["rate"], "125.00/Nos")
 		bill = voucher["ledgerentries"][0]["billallocations"][0]

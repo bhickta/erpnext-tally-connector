@@ -81,14 +81,19 @@ class MasterSyncService:
 		include_disabled=False,
 		include_opening_balances=False,
 		limit=None,
+		duplicate_names="skip",
 	):
 		selected = normalize_masters(masters)
+		duplicate_names = str(duplicate_names or "skip").strip().lower()
+		if duplicate_names not in {"skip", "suffix"}:
+			raise ValueError("duplicate_names must be skip or suffix")
 		params = {
 			"company": self.config.erpnext_company,
 			"masters": json.dumps(selected),
 			"include_disabled": int(bool(include_disabled)),
 			"include_opening_balances": int(bool(include_opening_balances)),
 			"posting_date": getattr(self.config, "from_date", None) or date.today().isoformat(),
+			"duplicate_names": duplicate_names,
 		}
 		if limit:
 			params["limit"] = int(limit)
@@ -199,6 +204,8 @@ class MasterSyncService:
 			"masters": selected,
 			"include_disabled": bool(include_disabled),
 			"include_opening_balances": bool(include_opening_balances),
+			"duplicate_names": duplicate_names,
+			"skipped": payload.get("skipped") or [],
 			"results": results,
 			"summary": summary,
 			"summary_error": summary_error,

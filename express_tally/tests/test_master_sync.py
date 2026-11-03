@@ -38,6 +38,66 @@ class TestMasterAliases(TestCase):
 		self.assertIn("ERPNext:Customer:CUST-0001", names)
 
 
+class TestNamePolicy(TestCase):
+	def test_item_names_use_display_and_suffix_duplicates(self):
+		items = [
+			{"name": "I1", "item_code": "I1", "item_name": "Widget"},
+			{"name": "I2", "item_code": "I2", "item_name": "Widget"},
+			{"name": "I3", "item_code": "I3", "item_name": "Unique"},
+		]
+
+		names = export._item_tally_names(items)
+
+		self.assertEqual(names["I1"], "Widget (I1)")
+		self.assertEqual(names["I2"], "Widget (I2)")
+		self.assertEqual(names["I3"], "Unique")
+
+	def test_party_duplicates_skip_or_suffix(self):
+		rows = [
+			{"name": "C1", "customer_name": "Same"},
+			{"name": "C2", "customer_name": "Same"},
+			{"name": "C3", "customer_name": "Other"},
+		]
+
+		names, skipped = export._party_tally_names(rows, "Customer", "skip")
+		self.assertEqual(names, {"C1": "Same", "C3": "Other"})
+		self.assertEqual(skipped[0]["erp_name"], "C2")
+
+		names, skipped = export._party_tally_names(rows, "Customer", "suffix")
+		self.assertEqual(names["C1"], "Same (C1)")
+		self.assertEqual(names["C2"], "Same (C2)")
+		self.assertFalse(skipped)
+
+	def test_warehouse_root_is_excluded_and_children_use_primary(self):
+		self.assertTrue(
+			export._is_warehouse_root(
+				{
+					"name": "All Warehouses - TC",
+					"warehouse_name": "All Warehouses",
+					"parent_warehouse": "",
+				}
+			)
+		)
+		self.assertFalse(
+			export._is_warehouse_root(
+				{
+					"name": "Stores - TC",
+					"warehouse_name": "Stores",
+					"parent_warehouse": "All Warehouses - TC",
+				}
+			)
+		)
+		message = export._godown_message(
+			{
+				"name": "Stores - TC",
+				"warehouse_name": "Stores",
+				"parent_warehouse": "All Warehouses - TC",
+			},
+			"TC",
+		)
+		self.assertEqual(message["parent"], export.TALLY_PRIMARY)
+
+
 class TestPartyMapping(TestCase):
 	def test_customer_ledger_maps_identity_gst_address_and_contact(self):
 		customer = {
@@ -105,7 +165,7 @@ class TestPartyMapping(TestCase):
 
 		self.assertEqual(message["metadata"]["type"], "Godown")
 		self.assertEqual(message["name"], "Stores")
-		self.assertEqual(message["parent"], "All Warehouses")
+		self.assertEqual(message["parent"], export.TALLY_PRIMARY)
 		self.assertIn("Stores - TC", message["language name"][0]["name"])
 		self.assertIn("ERPNext:Warehouse:Stores - TC", message["language name"][0]["name"])
 
@@ -156,11 +216,17 @@ class TestItemMapping(TestCase):
 			"_fetch_child_rows",
 			side_effect=lambda doctype, names, fields: rows.get(doctype, []),
 		):
-			messages = export._item_messages(items, "TC", posting_date="2026-04-01")
+			messages = export._item_messages(
+				items,
+				"TC",
+				{"ITEM-1": "Item One"},
+				posting_date="2026-04-01",
+			)
 
 		message = messages[0]
 		self.assertEqual(message["metadata"]["type"], "Stock Item")
-		self.assertEqual(message["name"], "ITEM-1")
+		self.assertEqual(message["name"], "Item One")
+		self.assertEqual(message["partno"], "ITEM-1")
 		self.assertEqual(message["parent"], "Products")
 		self.assertEqual(message["base units"], "Nos")
 		self.assertEqual(message["gstapplicable"], "Applicable")
@@ -270,7 +336,14 @@ class FakeMasterService:
 	def summary(self):
 		return {"Item": 5, "Item Group": 2, "UOM": 3}
 
-	def sync(self, masters=None, include_disabled=False, include_opening_balances=False, limit=None):
+	def sync(
+		self,
+		masters=None,
+		include_disabled=False,
+		include_opening_balances=False,
+		limit=None,
+		duplicate_names="skip",
+	):
 		return {
 			"ok": True,
 			"masters": masters or ["Item"],
