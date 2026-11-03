@@ -50,6 +50,19 @@ opening, voucher, and closing-balance records for company-specific ledger mirror
 flows. The ERPNext app that registers the flow remains responsible for exact
 ledger/party mapping and reconciliation policy.
 
+## Masters sync
+
+The **Masters sync** page pushes Item, Warehouse, Customer, and Supplier
+masters from ERPNext to the loaded Tally company. Item sync also creates the
+required Units and Item Groups. Each pushed master stores the ERPNext document
+name in the Tally alias, so a Tally record can always be mapped back to its
+ERPNext source.
+
+The utility is one-way (ERPNext → Tally), never deletes Tally masters, and
+leaves item opening stock off unless explicitly enabled. See
+[`docs/masters-sync.md`](../docs/masters-sync.md) for the field mapping and
+alias contract.
+
 ## Advanced command-line operation
 
 The Control Centre UI is the normal interface. These commands remain available

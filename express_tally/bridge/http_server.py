@@ -146,6 +146,15 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 				return
 			self._json(200, self.server.controller.config().public_dict())
 			return
+		if path.path == "/api/v1/masters":
+			if not self.server.is_control_centre:
+				self._json(404, {"error": "Not found"})
+				return
+			try:
+				self._json(200, self.server.controller.master_summary())
+			except Exception as exc:
+				self._json(503, {"error": str(exc)})
+			return
 		if path.path == "/api/v1/flows":
 			try:
 				self._json(200, {"flows": self.server.controller.flows()})
@@ -193,6 +202,19 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 				if not self.server.is_control_centre:
 					raise ValueError("Automatic sync requires Control Centre mode")
 				self._json(200, {"ok": True, **self.server.controller.set_auto_sync(body.get("enabled"))})
+				return
+			if path == "/api/v1/masters/sync":
+				if not self.server.is_control_centre:
+					raise ValueError("Masters sync requires Control Centre mode")
+				self._json(
+					200,
+					self.server.controller.sync_masters(
+						body.get("masters"),
+						include_disabled=bool(body.get("include_disabled")),
+						include_opening_balances=bool(body.get("include_opening_balances")),
+						limit=body.get("limit"),
+					),
+				)
 				return
 			if path == "/api/v1/test-connections":
 				self._json(200, self.server.controller.health())
