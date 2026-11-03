@@ -7,7 +7,9 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $python = Join-Path $root "python.exe"
 $pythonw = Join-Path $root "pythonw.exe"
-$existing = @(Get-CimInstance Win32_Process -Filter "Name='ERPNextTallyControlCentre.exe'")
+$existing = @(Get-CimInstance Win32_Process -Filter "Name='ERPNextTallyControlCentre.exe' OR Name='pythonw.exe'" | Where-Object {
+    $_.Name -eq 'ERPNextTallyControlCentre.exe' -or ($_.CommandLine -and $_.CommandLine -match 'express_tally\.bridge')
+})
 if (-not $ConfigPath -and $existing.Count -gt 0) {
     if ($existing[0].CommandLine -match '--config\s+"([^"]+)"') { $ConfigPath = $Matches[1] }
     elseif ($existing[0].CommandLine -match '--config\s+(\S+)') { $ConfigPath = $Matches[1] }
@@ -30,20 +32,10 @@ $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $backup = "$ConfigPath.backup-$(Get-Date -Format yyyyMMddHHmmss)"
 Copy-Item -LiteralPath $ConfigPath -Destination $backup
 if ($FrappeUrl) { $config.frappe_url = $FrappeUrl }
+# A masters-sync update preserves the operator's flow selection. Keep
+# unattended synchronization off until they review the new UI.
 $config.auto_sync_enabled = $false
 $config.open_browser_on_start = $false
-$config.enabled_flows = @($config.enabled_flows | Where-Object {
-    $_ -notin @('express_tally.standard_vouchers_from_tally', 'raplbaddi.fy_2026_27_ledger_mirror', 'express_tally.payment_entries_to_tally', 'express_tally.payments_from_tally')
-}) + @('express_tally.payment_entries_to_tally', 'express_tally.payments_from_tally')
-if ($config.flow_name -in @('express_tally.standard_vouchers_from_tally', 'raplbaddi.fy_2026_27_ledger_mirror')) { $config.flow_name = 'express_tally.payment_entries_to_tally' }
-if (-not $config.flow_options) { $config | Add-Member -Force NoteProperty flow_options ([PSCustomObject]@{}) }
-$options = [ordered]@{ submit_documents = $false }
-if ($config.flow_options.'express_tally.payments_from_tally') {
-    foreach ($property in $config.flow_options.'express_tally.payments_from_tally'.PSObject.Properties) { $options[$property.Name] = $property.Value }
-    $options.submit_documents = $false
-}
-if ($Branch) { $options.branch = $Branch }
-$config.flow_options | Add-Member -Force NoteProperty 'express_tally.payments_from_tally' ([PSCustomObject]$options)
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 # Run in the signed-in desktop rather than the guest-agent SYSTEM account.
 $taskName = 'Express-Tally-Portable-Control-Centre'
@@ -62,8 +54,10 @@ Start-ScheduledTask -TaskName $taskName
 for ($i = 0; $i -lt 15; $i++) {
     Start-Sleep -Seconds 1
     try {
-        $health = Invoke-RestMethod -Uri "http://127.0.0.1:$($config.listen_port)/health" -TimeoutSec 5
-        if ($health.ok) { Write-Output "Updated bridge healthy. Configuration backup: $backup"; exit 0 }
+        # The local service is healthy even when Tally or ERPNext is
+        # temporarily unavailable. Connection state is shown in the UI.
+        $state = Invoke-RestMethod -Uri "http://127.0.0.1:$($config.listen_port)/api/v1/state" -TimeoutSec 5
+        if ($state.status -eq 1) { Write-Output "Updated bridge running. Configuration backup: $backup"; exit 0 }
     } catch { }
 }
 Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue

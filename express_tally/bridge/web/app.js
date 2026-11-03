@@ -1,3 +1,4 @@
+import { initializeMasters, loadMasters } from "./masters.js";
 import { initializeOperations } from "./operations.js";
 
 const api = async (path, options = {}) => {
@@ -12,7 +13,7 @@ const api = async (path, options = {}) => {
   return payload;
 };
 
-const state = { config: {}, flows: [], status: {}, toastTimer: null };
+const state = { config: {}, flows: [], status: {}, masters: {}, toastTimer: null };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({
@@ -31,7 +32,8 @@ function toast(message, error = false) {
 function showPage(page) {
   $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.page === page));
   $$(".page").forEach((item) => item.classList.toggle("active", item.dataset.pagePanel === page));
-  $("#page-title").textContent = { overview: "Overview", flows: "Sync flows", operations: "Operations", history: "History", settings: "Settings" }[page];
+  $("#page-title").textContent = { overview: "Overview", flows: "Sync flows", masters: "Masters sync", operations: "Operations", history: "History", settings: "Settings" }[page];
+  if (page === "masters") loadMasters();
 }
 
 function directionLabel(direction) {
@@ -251,6 +253,7 @@ async function initialize() {
   await Promise.all([loadConfig(), loadState()]);
   await Promise.all([loadHealth(), loadFlows()]);
   initializeOperations({ state, api, toast, escapeHtml, directionLabel, loadConfig, loadState });
+  initializeMasters({ state, api, toast, escapeHtml });
   setInterval(loadState, 2000);
   setInterval(loadHealth, 30000);
 }

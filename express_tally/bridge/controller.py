@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .clients import FrappeClient, TallyClient
 from .config import ConfigStore
+from .master_sync import MasterSyncService
 from .service import SyncService
 
 LOGGER = logging.getLogger("erpnext_tally_bridge")
@@ -51,6 +52,8 @@ class ControlCentre:
 		self._next_auto_sync = None
 		self._wake_scheduler = threading.Event()
 		self._shutdown = threading.Event()
+		self._masters_lock = threading.Lock()
+		self._last_masters_result = None
 		self._scheduler_thread = threading.Thread(
 			target=self._scheduler_loop,
 			name="tally-control-centre-scheduler",
@@ -137,6 +140,45 @@ class ControlCentre:
 			"diagnostics": service.frappe.get_flow_diagnostics(service.config, flow_key, limit),
 		}
 
+	def _master_service(self):
+		service = self.make_service(require_flows=False)
+		return MasterSyncService(service.config, service.frappe, service.tally)
+
+	def master_summary(self):
+		service = self._master_service()
+		return {
+			**service.metadata(),
+			"summary": service.summary(),
+			"last_result": self._last_masters_result,
+		}
+
+	def sync_masters(
+		self,
+		masters=None,
+		include_disabled=False,
+		include_opening_balances=False,
+		limit=None,
+	):
+		if not self._masters_lock.acquire(blocking=False):
+			raise ValueError("A masters sync is already running")
+		try:
+			result = self._master_service().sync(
+				masters,
+				include_disabled=include_disabled,
+				include_opening_balances=include_opening_balances,
+				limit=limit,
+			)
+			with self._state_lock:
+				self._last_masters_result = {
+					"at": utc_now(),
+					"ok": result.get("ok"),
+					"masters": result.get("masters"),
+					"results": result.get("results"),
+				}
+			return result
+		finally:
+			self._masters_lock.release()
+
 	def preview_flow(self, flow_key, limit=20):
 		service = self.make_service(require_flows=False)
 		flow = next((row for row in service.discover_flows() if row.get("key") == flow_key), None)
@@ -194,6 +236,7 @@ class ControlCentre:
 				"auto_sync_directions": list(config.auto_sync_directions),
 				"next_auto_sync": self._next_auto_sync,
 				"configuration_error": configuration_error,
+				"last_masters": self._last_masters_result,
 			}
 
 	def trigger(self, direction="all", flow_keys=None, limit=None, source="manual"):

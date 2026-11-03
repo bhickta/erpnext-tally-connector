@@ -18,6 +18,7 @@ def ensure_tally_sync_role():
 	from frappe.permissions import add_permission, update_permission_property
 
 	for doctype in (
+		"Company",
 		"Customer",
 		"Supplier",
 		"Account",
@@ -25,6 +26,19 @@ def ensure_tally_sync_role():
 		"Sales Invoice",
 		"Purchase Invoice",
 		"Journal Entry",
+		# Master sync reads these through the Tally Sync User API.
+		"Item",
+		"Item Group",
+		"Warehouse",
+		"UOM",
+		"Customer Group",
+		"Supplier Group",
+		"Address",
+		"Contact",
+		"Customer Credit Limit",
+		"Item Barcode",
+		"Item Reorder",
+		"UOM Conversion Detail",
 	):
 		if not frappe.db.exists("DocType", doctype):
 			continue

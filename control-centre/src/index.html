@@ -17,6 +17,7 @@
         <nav>
           <button class="nav-item active" data-page="overview">Overview</button>
           <button class="nav-item" data-page="flows">Sync flows</button>
+          <button class="nav-item" data-page="masters">Masters sync</button>
           <button class="nav-item" data-page="operations">Operations</button>
           <button class="nav-item" data-page="history">History</button>
           <button class="nav-item" data-page="settings">Settings</button>
@@ -90,6 +91,31 @@
             <p class="muted">Enable the flows this computer is responsible for. A matching local agent profile is required for each direction.</p>
             <div id="flows-list" class="flows-list"><div class="empty">Connect ERPNext to discover flows.</div></div>
             <div class="form-actions"><button class="button primary" id="save-flows">Save enabled flows</button></div>
+          </article>
+        </section>
+
+        <section class="page" data-page-panel="masters">
+          <article class="panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">ERPNEXT → TALLY</p><h2>Masters sync</h2></div>
+              <button class="button secondary" id="refresh-masters">Refresh counts</button>
+            </div>
+            <p class="muted">Push Item, Warehouse, Customer and Supplier masters to TallyPrime. Each Tally master stores the ERPNext identity in its alias field so records can be matched later. Item sync also pushes Item Groups and Units.</p>
+            <div id="masters-error" class="alert hidden"></div>
+            <div id="masters-list" class="masters-list"><div class="empty">Connect ERPNext to load master counts.</div></div>
+            <div class="masters-actions">
+              <label class="check"><input id="masters-include-disabled" type="checkbox" /> Include disabled records</label>
+              <label class="check"><input id="masters-include-openings" type="checkbox" /> Include item opening stock</label>
+              <label class="masters-limit">Limit per group<input id="masters-limit" type="number" min="1" placeholder="All" /></label>
+              <button class="button primary" id="sync-masters">Sync selected to Tally</button>
+            </div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading">
+              <div><p class="eyebrow">LAST RUN</p><h2>Masters sync results</h2></div>
+              <span class="tag" id="masters-last-run">Not run</span>
+            </div>
+            <div id="masters-results"><div class="empty">Select one or more master types and run the sync.</div></div>
           </article>
         </section>
 
