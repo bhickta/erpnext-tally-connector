@@ -1,5 +1,6 @@
 """Standard TDL-free Tally master and voucher imports for the Control Centre."""
 
+import logging
 import re
 import uuid
 from collections.abc import Mapping
@@ -12,6 +13,7 @@ from express_tally.bridge.common import SUCCESS_STATUSES, is_success_status, par
 from express_tally.framework import InboundFlow
 from express_tally.framework.sync_log import sync_idempotency_key
 
+LOGGER = logging.getLogger("express_tally.inbound")
 ALLOWED_ROLES = frozenset({"Tally Sync User", "Accounts Manager", "System Manager"})
 
 
@@ -135,9 +137,12 @@ class LoggedInboundFlow(InboundFlow):
 
 	def receive(self, context, records):
 		results = []
+		succeeded = failed = 0
 		for index, record in enumerate(records):
 			if not isinstance(record, Mapping) or not record.get("_tally_key"):
+				LOGGER.warning("Inbound flow %s rejected a record without a Tally identity", self.key)
 				results.append({"status": "Failed", "message": "Invalid Tally source identity"})
+				failed += 1
 				continue
 			previous = self.sync_log.previous_success(context, record)
 			if previous:
@@ -171,6 +176,23 @@ class LoggedInboundFlow(InboundFlow):
 				operation = "Alter" if previous_target else "Create"
 			self.sync_log.record(context, record, result, operation=operation)
 			results.append(result)
+			if is_success_status(result.get("status")):
+				succeeded += 1
+			else:
+				failed += 1
+				LOGGER.warning(
+					"Inbound flow %s failed for %s: %s",
+					self.key,
+					record.get("_tally_key"),
+					result.get("message"),
+				)
+		LOGGER.info(
+			"Inbound flow %s processed %s record(s): %s succeeded, %s failed",
+			self.key,
+			len(records),
+			succeeded,
+			failed,
+		)
 		return results
 
 	def _cancel_previous(self, record):
