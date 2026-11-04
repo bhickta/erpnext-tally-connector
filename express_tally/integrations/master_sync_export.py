@@ -6,10 +6,15 @@ Item sync automatically includes its dependencies (UOM and Item Group).
 Every pushed Tally master stores the ERPNext identity in the Tally alias list
 (``LANGUAGENAME.LIST`` / ``NAME.LIST``):
 
-* Item        - Tally name is the item code; alias is the item name.
+* Item        - Tally name is the ERPNext item name; alias is the item code.
 * Warehouse   - Tally name is the warehouse name; alias is the ERPNext ID.
 * Customer    - Tally name is the customer name; alias is the ERPNext ID.
 * Supplier    - Tally name is the supplier name; alias is the ERPNext ID.
+
+Duplicate display names are handled explicitly. Items append the item code
+when their display name is shared. Parties and warehouses either keep the
+first record and report the rest, or append the ERPNext ID to every colliding
+record, depending on ``duplicate_names``.
 
 Customers and suppliers additionally carry the ERPNext ID in ``LEDGERCODE``.
 The payload is returned in dependency order so the bridge can import it in
@@ -18,15 +23,20 @@ separate JSONEx requests: units, groups, warehouses, parties, then items.
 
 import json
 import re
+from collections import Counter, defaultdict
 from datetime import date
 
 import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
-MASTER_SYNC_TYPES = ("Item", "Warehouse", "Customer", "Supplier")
+from .tally_export import DEFAULT_ACCOUNT_GROUPS
+
+MASTER_SYNC_TYPES = ("Group", "Ledger", "Item", "Warehouse", "Customer", "Supplier")
 
 MASTER_SYNC_LABELS = {
+	"Group": "Accounting groups",
+	"Ledger": "Ledgers",
 	"Item": "Items",
 	"Warehouse": "Warehouses",
 	"Customer": "Customers",
@@ -34,10 +44,38 @@ MASTER_SYNC_LABELS = {
 }
 
 TALLY_MASTER_TYPES = {
+	"Group": "Group",
+	"Ledger": "Ledger",
 	"Item": "Stock Item",
 	"Warehouse": "Godown",
 	"Customer": "Ledger",
 	"Supplier": "Ledger",
+}
+
+# TallyPrime's predefined accounting groups. These are not created as custom
+# masters; ERPNext account groups that match them are used as parents.
+TALLY_STANDARD_GROUPS = {
+	*DEFAULT_ACCOUNT_GROUPS.values(),
+	"Capital Account",
+	"Loans (Liability)",
+	"Current Liabilities",
+	"Fixed Assets",
+	"Current Assets",
+	"Investments",
+	"Loans & Advances (Asset)",
+	"Misc. Expenses (ASSET)",
+	"Sales Accounts",
+	"Purchase Accounts",
+	"Direct Incomes",
+	"Indirect Incomes",
+	"Direct Expenses",
+	"Indirect Expenses",
+	"Bank Accounts",
+	"Cash-in-Hand",
+	"Sundry Debtors",
+	"Sundry Creditors",
+	"Duties & Taxes",
+	"Stock-in-Hand",
 }
 
 PARTY_PARENT = {
@@ -109,6 +147,84 @@ def _identity_alias(tally_name, erp_name, doctype):
 	if erp_name:
 		aliases.append(f"ERPNext:{doctype}:{erp_name}")
 	return aliases
+
+
+def _item_tally_names(items):
+	"""Return unique Tally item names keyed by ERPNext item code.
+
+	The display name is the normal Tally master name because that is how the
+	existing Tally data is named. When several ERPNext items share a display
+	name, every colliding record is suffixed with its item code.
+	"""
+	counts = Counter(
+		_text(item.get("item_name")) or item.get("item_code") or item["name"] for item in items
+	)
+	names = {}
+	for item in items:
+		code = item.get("item_code") or item["name"]
+		display = _text(item.get("item_name")) or code
+		names[code] = f"{display} ({code})" if counts[display] > 1 else display
+	return names
+
+
+def _duplicate_name_report(master, name, rows):
+	return [
+		{
+			"master": master,
+			"name": name,
+			"erp_name": row["name"],
+			"reason": "Duplicate Tally name; first record kept",
+		}
+		for row in rows
+	]
+
+
+def _party_tally_names(parties, doctype, policy="skip"):
+	groups = defaultdict(list)
+	for row in parties:
+		name = (row.get("customer_name") if doctype == "Customer" else row.get("supplier_name")) or row["name"]
+		groups[name].append(row)
+	names = {}
+	skipped = []
+	for name, rows in groups.items():
+		rows = sorted(rows, key=lambda row: row["name"])
+		if len(rows) == 1:
+			names[rows[0]["name"]] = name
+			continue
+		if policy == "suffix":
+			for row in rows:
+				names[row["name"]] = f"{name} ({row['name']})"
+		else:
+			names[rows[0]["name"]] = name
+			skipped.extend(_duplicate_name_report(doctype, name, rows[1:]))
+	return names, skipped
+
+
+def _warehouse_tally_names(warehouses, company_abbr, policy="skip"):
+	groups = defaultdict(list)
+	for row in warehouses:
+		groups[_clean_name(row.get("warehouse_name") or row["name"], company_abbr)].append(row)
+	names = {}
+	skipped = []
+	for name, rows in groups.items():
+		rows = sorted(rows, key=lambda row: row["name"])
+		if len(rows) == 1:
+			names[rows[0]["name"]] = name
+			continue
+		if policy == "suffix":
+			for row in rows:
+				names[row["name"]] = f"{name} ({row['name']})"
+		else:
+			names[rows[0]["name"]] = name
+			skipped.extend(_duplicate_name_report("Warehouse", name, rows[1:]))
+	return names, skipped
+
+
+def _is_warehouse_root(row):
+	if row.get("parent_warehouse"):
+		return False
+	name = (row.get("warehouse_name") or row["name"] or "").strip().casefold()
+	return name == "all warehouses" or name.startswith("all warehouses -")
 
 
 def _string_list(values):
@@ -192,17 +308,91 @@ def _stock_group_message(row):
 
 
 # ---------------------------------------------------------------------------
+# Accounting Group / Ledger
+# ---------------------------------------------------------------------------
+
+
+def _account_parent(account, by_name, company_abbr):
+	parent = by_name.get(account.get("parent_account"))
+	if parent and parent.get("parent_account"):
+		return _clean_name(parent.get("account_name") or parent.get("name"), company_abbr)
+	return DEFAULT_ACCOUNT_GROUPS.get(account.get("account_type")) or {
+		"Asset": "Current Assets",
+		"Liability": "Current Liabilities",
+		"Equity": "Capital Account",
+		"Income": "Indirect Incomes",
+		"Expense": "Indirect Expenses",
+	}.get(account.get("root_type"), "Current Assets")
+
+
+def _account_messages(accounts, company_abbr, include_disabled=False, company_currency=None):
+	"""Return Tally Group and Ledger masters for the ERPNext chart of accounts."""
+	by_name = {row["name"]: row for row in accounts}
+	groups = []
+	ledgers = []
+	for account in accounts:
+		if not account.get("parent_account"):
+			continue
+		if account.get("disabled") and not include_disabled:
+			continue
+		name = _clean_name(account.get("account_name") or account["name"], company_abbr)
+		parent = _account_parent(account, by_name, company_abbr)
+		aliases = _alias_list(
+			name, _identity_alias(name, account["name"], "Account")
+		)
+		if cint(account.get("is_group")):
+			if name in TALLY_STANDARD_GROUPS:
+				# Use Tally's predefined group as the parent for its children.
+				continue
+			message = _message(
+				"Group",
+				name,
+				parent=parent,
+				isbillwiseon=False,
+				iscostcentreson=False,
+				isaddable=True,
+				isrevenue=account.get("root_type") == "Income",
+				affectsstock=False,
+				**{"language name": aliases},
+			)
+			if account.get("disabled"):
+				message["isdeleted"] = True
+			groups.append(message)
+			continue
+		message = _message(
+			"Ledger",
+			name,
+			parent=parent,
+			isbillwiseon=account.get("account_type") in ("Receivable", "Payable"),
+			iscostcentreson=False,
+			affectsstock=False,
+			isgstapplicable=False,
+			ledgercode=account.get("account_number") or account["name"],
+			**{"language name": aliases},
+		)
+		currency = account.get("account_currency")
+		if currency and company_currency and currency != company_currency:
+			message["currency"] = currency
+		if account.get("disabled"):
+			message["isdeleted"] = True
+		ledgers.append(message)
+	return groups, ledgers
+
+
+# ---------------------------------------------------------------------------
 # Warehouse / Godown
 # ---------------------------------------------------------------------------
 
 
-def _godown_message(row, company_abbr):
-	name = _clean_name(row.get("warehouse_name") or row["name"], company_abbr)
+def _godown_message(row, company_abbr, tally_name=None):
+	name = tally_name or _clean_name(row.get("warehouse_name") or row["name"], company_abbr)
 	parent = _clean_name(row.get("parent_warehouse"), company_abbr)
+	if not parent or parent.casefold() == "all warehouses":
+		parent = TALLY_PRIMARY
 	return _message(
 		"Godown",
 		name,
-		parent=parent or TALLY_PRIMARY,
+		parent=parent,
 		**{
 			"language name": _alias_list(
 				name, _identity_alias(name, row["name"], "Warehouse")
@@ -344,8 +534,22 @@ def _address_values(address):
 	return lines, address.get("state") or "", address.get("pincode") or "", address.get("country") or ""
 
 
-def _ledger_message(party, doctype, company, address, contact, credit_limit, posting_date=None):
-	name = (party.get("customer_name") if doctype == "Customer" else party.get("supplier_name")) or party["name"]
+def _ledger_message(
+	party,
+	doctype,
+	company,
+	address,
+	contact,
+	credit_limit,
+	posting_date=None,
+	tally_name=None,
+	parent=None,
+):
+	name = (
+		tally_name
+		or (party.get("customer_name") if doctype == "Customer" else party.get("supplier_name"))
+		or party["name"]
+	)
 	address_lines, state, pincode, address_country = _address_values(address)
 	tax_id = _text(party.get("gstin") or party.get("tax_id"))
 	pan = _text(party.get("pan"))
@@ -369,7 +573,7 @@ def _ledger_message(party, doctype, company, address, contact, credit_limit, pos
 		)
 	)
 	fields = {
-		"parent": PARTY_PARENT[doctype],
+		"parent": parent or PARTY_PARENT[doctype],
 		"isbillwiseon": True,
 		"iscostcentreson": False,
 		"affectsstock": False,
@@ -457,7 +661,13 @@ def _fetch_child_rows(doctype, item_names, fields):
 	)
 
 
-def _item_messages(items, company_abbr, include_opening_balances=False, posting_date=None):
+def _item_messages(
+	items,
+	company_abbr,
+	item_names,
+	include_opening_balances=False,
+	posting_date=None,
+):
 	names = [row["name"] for row in items]
 	barcodes = {}
 	for row in _fetch_child_rows("Item Barcode", names, ["barcode", "uom"]):
@@ -475,18 +685,16 @@ def _item_messages(items, company_abbr, include_opening_balances=False, posting_
 
 	messages = []
 	for item in items:
-		name = item.get("item_code") or item["name"]
+		code = item.get("item_code") or item["name"]
+		tally_name = item_names.get(code) or code
 		uom = item.get("stock_uom") or "Nos"
 		parent = item.get("item_group") or TALLY_PRIMARY
 		if parent == "All Item Groups":
 			parent = TALLY_PRIMARY
-		description = _text(item.get("description")) or _text(item.get("item_name")) or name
-		aliases = _identity_alias(name, name, "Item")
-		if item.get("item_name") and item["item_name"].casefold() != name.casefold():
-			aliases.append(item["item_name"])
+		description = _text(item.get("description")) or _text(item.get("item_name")) or code
 		message = _message(
 			"Stock Item",
-			name,
+			tally_name,
 			parent=parent,
 			**{
 				"base units": uom,
@@ -500,9 +708,11 @@ def _item_messages(items, company_abbr, include_opening_balances=False, posting_
 				"ignoregodowns": not bool(cint(item.get("is_stock_item"))),
 				"iscostcentreson": False,
 				"iscosttrackingon": False,
-				"language name": _alias_list(name, aliases),
+				"language name": _alias_list(
+					tally_name, [code, f"ERPNext:Item:{code}"]
+				),
 				"hsncode": item.get("gst_hsn_code") or None,
-				"partno": name,
+				"partno": code,
 			},
 		)
 		if item.get("valuation_method"):
@@ -576,12 +786,18 @@ def build_master_sync_summary(company):
 	if not frappe.db.exists("Company", company):
 		frappe.throw(_("Company {0} does not exist").format(frappe.bold(company)))
 	return {
+		"Group": frappe.db.count(
+			"Account", {"company": company, "is_group": 1, "disabled": 0}
+		),
+		"Ledger": frappe.db.count(
+			"Account", {"company": company, "is_group": 0, "disabled": 0}
+		),
 		"Item": frappe.db.count("Item", {"disabled": 0}),
 		"Warehouse": frappe.db.count("Warehouse", {"company": company, "disabled": 0}),
 		"Customer": frappe.db.count("Customer", {"disabled": 0}),
 		"Supplier": frappe.db.count("Supplier", {"disabled": 0}),
 		"Item Group": frappe.db.count("Item Group"),
-		"UOM": frappe.db.count("UOM", {"enabled": 1}),
+		"UOM": frappe.db.count("UOM"),
 	}
 
 
@@ -592,10 +808,17 @@ def build_master_sync_payload(
 	include_opening_balances=False,
 	posting_date=None,
 	limit=None,
+	duplicate_names="skip",
+	customer_parent="Sundry Debtors",
+	supplier_parent="Sundry Creditors",
 ):
 	"""Return dependency-ordered Tally JSONEx batches for the selected masters."""
 	if not frappe.db.exists("Company", company):
 		frappe.throw(_("Company {0} does not exist").format(frappe.bold(company)))
+	customer_parent = str(customer_parent or "").strip()
+	supplier_parent = str(supplier_parent or "").strip()
+	if not customer_parent or not supplier_parent:
+		frappe.throw(_("Customer and supplier parent groups are required"))
 	posting_date = str(posting_date or date.today().isoformat())
 	try:
 		date.fromisoformat(posting_date)
@@ -604,15 +827,62 @@ def build_master_sync_payload(
 	limit = cint(limit) if limit not in (None, "") else 0
 	if limit < 0:
 		frappe.throw(_("limit must be zero or a positive number"))
+	duplicate_names = str(duplicate_names or "skip").strip().lower()
+	if duplicate_names not in {"skip", "suffix"}:
+		frappe.throw(_("duplicate_names must be skip or suffix"))
 	selected = _parse_master_types(masters)
 	company_abbr = frappe.get_cached_value("Company", company, "abbr")
 	batches = []
 	item_messages = []
+	skipped = []
+
+	if "Group" in selected or "Ledger" in selected:
+		account_fields = [
+			"name",
+			"account_name",
+			"parent_account",
+			"is_group",
+			"root_type",
+			"account_type",
+			"account_currency",
+			"disabled",
+		]
+		if _has_column("Account", "account_number"):
+			account_fields.append("account_number")
+		accounts = frappe.get_all(
+			"Account",
+			filters={"company": company},
+			fields=account_fields,
+			order_by="lft",
+		)
+		company_currency = frappe.get_cached_value("Company", company, "default_currency")
+		account_groups, account_ledgers = _account_messages(
+			accounts,
+			company_abbr,
+			include_disabled=include_disabled,
+			company_currency=company_currency,
+		)
+		batches.append(
+			{
+				"key": "account_groups",
+				"label": "Accounting groups",
+				"tallymessage": account_groups,
+			}
+		)
+		if "Ledger" in selected:
+			batches.append(
+				{
+					"key": "account_ledgers",
+					"label": "Ledgers",
+					"tallymessage": account_ledgers,
+				}
+			)
 
 	if "Item" in selected:
+		# Include every UOM, including disabled ones that an active item may
+		# still reference. Tally needs the unit before the stock item.
 		uom_rows = frappe.get_all(
 			"UOM",
-			filters={"enabled": 1},
 			fields=["name", "uom_name", "must_be_whole_number"],
 			order_by="name",
 		)
@@ -649,11 +919,22 @@ def build_master_sync_payload(
 		)
 		if not include_disabled:
 			warehouses = [row for row in warehouses if not cint(row.get("disabled"))]
+		warehouses = [row for row in warehouses if not _is_warehouse_root(row)]
+		warehouse_names, warehouse_skipped = _warehouse_tally_names(
+			warehouses, company_abbr, duplicate_names
+		)
+		skipped.extend(warehouse_skipped)
 		batches.append(
 			{
 				"key": "warehouses",
 				"label": "Warehouses",
-				"tallymessage": [_godown_message(row, company_abbr) for row in warehouses],
+				"tallymessage": [
+					_godown_message(
+						row, company_abbr, tally_name=warehouse_names.get(row["name"])
+					)
+					for row in warehouses
+					if row["name"] in warehouse_names
+				],
 			}
 		)
 
@@ -661,6 +942,9 @@ def build_master_sync_payload(
 		if doctype not in selected:
 			continue
 		parties = _fetch_parties(doctype, include_disabled=include_disabled)
+		party_names, party_skipped = _party_tally_names(parties, doctype, duplicate_names)
+		skipped.extend(party_skipped)
+		parties = [party for party in parties if party["name"] in party_names]
 		addresses = _fetch_addresses(parties)
 		contacts = _fetch_contacts(parties)
 		credit_limits = _fetch_customer_credit_limits(parties, company) if doctype == "Customer" else {}
@@ -677,6 +961,8 @@ def build_master_sync_payload(
 					contacts.get(contact_name),
 					credit_limits.get(party["name"], 0),
 					posting_date=posting_date,
+					tally_name=party_names[party["name"]],
+					parent=customer_parent if doctype == "Customer" else supplier_parent,
 				)
 			)
 		batches.append(
@@ -692,6 +978,7 @@ def build_master_sync_payload(
 		item_messages = _item_messages(
 			items,
 			company_abbr,
+			_item_tally_names(items),
 			include_opening_balances=include_opening_balances,
 			posting_date=posting_date,
 		)
@@ -706,13 +993,26 @@ def build_master_sync_payload(
 	if limit:
 		for batch in batches:
 			# Keep dependency batches complete so a limited test still has the
-			# units and groups referenced by the selected items.
-			if batch["key"] in {"warehouses", "customers", "suppliers", "items"}:
+			# units/groups referenced by the selected masters.
+			if batch["key"] == "account_groups" and "Ledger" in selected:
+				continue
+			if batch["key"] in {
+				"account_groups",
+				"account_ledgers",
+				"warehouses",
+				"customers",
+				"suppliers",
+				"items",
+			}:
 				batch["tallymessage"] = batch["tallymessage"][:limit]
 
 	counts = {key: 0 for key in MASTER_SYNC_TYPES}
 	for batch in batches:
-		if batch["key"] == "items":
+		if batch["key"] == "account_groups":
+			counts["Group"] = len(batch["tallymessage"])
+		elif batch["key"] == "account_ledgers":
+			counts["Ledger"] = len(batch["tallymessage"])
+		elif batch["key"] == "items":
 			counts["Item"] = len(batch["tallymessage"])
 		elif batch["key"] == "warehouses":
 			counts["Warehouse"] = len(batch["tallymessage"])
@@ -727,8 +1027,10 @@ def build_master_sync_payload(
 		"masters": selected,
 		"include_disabled": bool(include_disabled),
 		"limit": limit,
+		"duplicate_names": duplicate_names,
 		"batches": batches,
 		"counts": counts,
+		"skipped": skipped,
 	}
 
 
@@ -746,6 +1048,9 @@ def get_master_sync_payload(
 	include_opening_balances=0,
 	posting_date=None,
 	limit=None,
+	duplicate_names="skip",
+	customer_parent="Sundry Debtors",
+	supplier_parent="Sundry Creditors",
 ):
 	frappe.only_for(("Accounts Manager", "System Manager", "Tally Sync User"))
 	return build_master_sync_payload(
@@ -755,4 +1060,7 @@ def get_master_sync_payload(
 		include_opening_balances=cint(include_opening_balances),
 		posting_date=posting_date,
 		limit=cint(limit) if limit not in (None, "") else None,
+		duplicate_names=duplicate_names,
+		customer_parent=customer_parent,
+		supplier_parent=supplier_parent,
 	)

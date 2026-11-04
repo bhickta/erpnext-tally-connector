@@ -66,7 +66,10 @@ class TestSalesDocumentMapper(TestCase):
 		)
 		fake_frappe = SimpleNamespace(
 			get_all=Mock(return_value=[item]),
-			db=SimpleNamespace(get_value=Mock(return_value="All Item Groups")),
+			db=SimpleNamespace(
+				get_value=Mock(return_value="All Item Groups"),
+				count=Mock(return_value=0),
+			),
 			_dict=lambda: Record(),
 		)
 
@@ -78,5 +81,6 @@ class TestSalesDocumentMapper(TestCase):
 		self.assertEqual(payload["taxes"][0]["ledger"], "Output IGST")
 		self.assertEqual(payload["items"][0]["rate"], 125)
 		self.assertEqual(payload["items"][0]["warehouse"], "Stores")
+		self.assertEqual(payload["items"][0]["tally_name"], "Item One")
 		self.assertEqual(payload["masters"]["item_groups"], [{"name": "Products", "parent": ""}])
 		self.assertEqual(len(payload["source_hash"]), 64)

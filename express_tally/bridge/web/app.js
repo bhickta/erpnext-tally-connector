@@ -111,9 +111,10 @@ async function loadHealth(showToast = false) {
 async function loadConfig() {
   state.config = await api("/api/v1/config");
   const form = $("#settings-form");
-  ["frappe_url", "api_key", "api_secret", "erpnext_company", "target_id", "tally_url", "tally_company", "voucher_date_override", "batch_size", "poll_interval_seconds", "request_timeout_seconds", "from_date", "to_date"].forEach((name) => {
+  ["frappe_url", "api_key", "api_secret", "erpnext_company", "target_id", "tally_url", "tally_company", "voucher_date_override", "batch_size", "poll_interval_seconds", "request_timeout_seconds", "from_date", "to_date", "customer_parent", "supplier_parent", "master_batch_size", "ca_bundle"].forEach((name) => {
     form.elements[name].value = state.config[name] ?? "";
   });
+  form.elements.verify_tls.checked = state.config.verify_tls !== false;
   form.elements.open_browser_on_start.checked = Boolean(state.config.open_browser_on_start);
 	form.elements.start_with_windows.checked = Boolean(state.config.start_with_windows);
   form.elements.auto_outbound.checked = (state.config.auto_sync_directions || []).includes("erpnext_to_tally");
@@ -144,6 +145,11 @@ function settingsPayload() {
     request_timeout_seconds: Number(formData.get("request_timeout_seconds")),
     from_date: nullable("from_date"),
     to_date: nullable("to_date"),
+    customer_parent: String(formData.get("customer_parent") || "").trim(),
+    supplier_parent: String(formData.get("supplier_parent") || "").trim(),
+    master_batch_size: Number(formData.get("master_batch_size")),
+    ca_bundle: String(formData.get("ca_bundle") || "").trim(),
+    verify_tls: form.elements.verify_tls.checked,
     auto_sync_directions: [
       ...(form.elements.auto_outbound.checked ? ["erpnext_to_tally"] : []),
       ...(form.elements.auto_inbound.checked ? ["tally_to_erpnext"] : []),
@@ -236,6 +242,13 @@ function wireEvents() {
     try { await saveSettings(); } catch (error) { toast(error.message, true); }
   });
   $("#refresh-flows").addEventListener("click", () => loadFlows(true));
+	$("#stop-bridge").addEventListener("click", async () => {
+	  if (!window.confirm("Stop the local bridge? The Control Centre will close until it is restarted.")) return;
+	  try {
+		await api("/api/v1/shutdown", { method: "POST", body: "{}" });
+		toast("Bridge stopping. Restart it from start-control-centre.cmd or the scheduled task.");
+	  } catch (error) { toast(error.message, true); }
+	});
 	$("#reset-checkpoints").addEventListener("click", async () => {
 	  if (!window.confirm("Reset the inbound checkpoint for this target? Tally records will be offered to ERPNext again; existing sync logs still prevent duplicate versions.")) return;
 	  try {

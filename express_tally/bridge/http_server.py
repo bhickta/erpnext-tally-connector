@@ -114,6 +114,12 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 		LOGGER.warning("Control API request failed: %s", exc)
 		self._json(400, {"ok": False, "error": str(exc)})
 
+	def _shutdown_bridge(self):
+		# Give the HTTP response time to reach the browser before serve_forever
+		# exits and the Control Centre process terminates.
+		time.sleep(0.25)
+		self.server.shutdown()
+
 	def do_GET(self):
 		path = urllib.parse.urlparse(self.path)
 		if path.path in {"/health", "/api/v1/health"}:
@@ -213,8 +219,20 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 						include_disabled=bool(body.get("include_disabled")),
 						include_opening_balances=bool(body.get("include_opening_balances")),
 						limit=body.get("limit"),
+						duplicate_names=body.get("duplicate_names", "skip"),
 					),
 				)
+				return
+			if path == "/api/v1/masters/cancel":
+				if not self.server.is_control_centre:
+					raise ValueError("Masters sync requires Control Centre mode")
+				self._json(200, {"ok": True, **self.server.controller.cancel_masters()})
+				return
+			if path == "/api/v1/shutdown":
+				if not self.server.is_control_centre:
+					raise ValueError("Shutdown requires Control Centre mode")
+				self._json(200, {"ok": True, "message": "Bridge shutting down"})
+				threading.Thread(target=self._shutdown_bridge, daemon=True).start()
 				return
 			if path == "/api/v1/test-connections":
 				self._json(200, self.server.controller.health())

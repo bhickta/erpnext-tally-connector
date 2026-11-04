@@ -84,7 +84,11 @@ class TestTallyJSONGateway(TestCase):
 		self.assertEqual(unit["metadata"]["action"], "create")
 		self.assertEqual(unit["originalname"], "Numbers")
 		self.assertEqual(requests[1]["tallymessage"][-1]["metadata"]["type"], "Ledger")
-		self.assertEqual(requests[2]["tallymessage"][0]["metadata"]["type"], "Stock Item")
+		stock_item = requests[2]["tallymessage"][0]
+		self.assertEqual(stock_item["metadata"]["type"], "Stock Item")
+		self.assertEqual(stock_item["name"], "Item One")
+		self.assertEqual(stock_item["partno"], "ITEM-1")
+		self.assertIn("ERPNext:Item:ITEM-1", stock_item["language name"][0]["name"])
 
 	def test_voucher_contains_balanced_order_and_inventory_details(self):
 		request = build_voucher_import(sample_order(), "Test Company", "target-1")
@@ -98,6 +102,7 @@ class TestTallyJSONGateway(TestCase):
 		self.assertEqual(voucher["date"], "20260828")
 		self.assertEqual(voucher["ledgerentries"][0]["amount"], "-295.00")
 		inventory = voucher["allinventoryentries"][0]
+		self.assertEqual(inventory["stockitemname"], "Item One")
 		self.assertEqual(inventory["actualqty"], " 2 Nos")
 		self.assertEqual(inventory["rate"], "125.00/Nos")
 		bill = voucher["ledgerentries"][0]["billallocations"][0]
@@ -749,3 +754,30 @@ class TestConfigStore(TestCase):
 			store.update({"api_secret": SECRET_MASK, "enabled_flows": ["test.outbound"]})
 			self.assertEqual(store.load().api_secret, "secret")
 			self.assertEqual(store.load().selected_flows, ("test.outbound",))
+
+	def test_master_sync_settings_are_configurable_and_validated(self):
+		with tempfile.TemporaryDirectory() as directory:
+			store = ConfigStore(Path(directory) / "tally-bridge.json")
+			stored = store.update(
+				{
+					"frappe_url": "https://erp.example.com",
+					"api_key": "key",
+					"api_secret": "secret",
+					"erpnext_company": "ERP Company",
+					"target_id": "target-1",
+					"tally_company": "Tally Company",
+					"customer_parent": "Trade Debtors",
+					"supplier_parent": "Trade Creditors",
+					"master_batch_size": 500,
+					"ca_bundle": "C:/certs/ca.pem",
+					"verify_tls": False,
+				}
+			)
+
+			self.assertEqual(stored.customer_parent, "Trade Debtors")
+			self.assertEqual(stored.supplier_parent, "Trade Creditors")
+			self.assertEqual(stored.master_batch_size, 500)
+			self.assertEqual(stored.ca_bundle, "C:/certs/ca.pem")
+			self.assertFalse(stored.verify_tls)
+			with self.assertRaises(ValueError):
+				store.update({"master_batch_size": 0})

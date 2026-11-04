@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Mapping
 from typing import ClassVar
@@ -778,6 +779,10 @@ def _item_code(value):
 		return None
 	if frappe.db.exists("Item", value):
 		return value
+	# Duplicate item names are stored as "Display Name (ITEM-CODE)".
+	match = re.search(r"\(([^()]+)\)\s*$", value)
+	if match and frappe.db.exists("Item", match.group(1)):
+		return match.group(1)
 	return frappe.db.get_value("Item", {"item_name": value}, "name")
 
 

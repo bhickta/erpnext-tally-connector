@@ -53,6 +53,8 @@ class ControlCentre:
 		self._wake_scheduler = threading.Event()
 		self._shutdown = threading.Event()
 		self._masters_lock = threading.Lock()
+		self._masters_cancel = None
+		self._masters_running = False
 		self._last_masters_result = None
 		self._scheduler_thread = threading.Thread(
 			target=self._scheduler_loop,
@@ -121,6 +123,8 @@ class ControlCentre:
 			config.api_key,
 			config.api_secret,
 			config.request_timeout_seconds,
+			ca_bundle=config.ca_bundle or None,
+			verify_tls=config.verify_tls,
 		)
 		tally_client = TallyClient(config.tally_url, config.request_timeout_seconds)
 		return SyncService(config, frappe_client, tally_client)
@@ -158,26 +162,46 @@ class ControlCentre:
 		include_disabled=False,
 		include_opening_balances=False,
 		limit=None,
+		duplicate_names="skip",
 	):
 		if not self._masters_lock.acquire(blocking=False):
 			raise ValueError("A masters sync is already running")
+		cancel_event = threading.Event()
+		with self._state_lock:
+			self._masters_cancel = cancel_event
+			self._masters_running = True
 		try:
 			result = self._master_service().sync(
 				masters,
 				include_disabled=include_disabled,
 				include_opening_balances=include_opening_balances,
 				limit=limit,
+				duplicate_names=duplicate_names,
+				cancel_event=cancel_event,
 			)
 			with self._state_lock:
 				self._last_masters_result = {
 					"at": utc_now(),
 					"ok": result.get("ok"),
 					"masters": result.get("masters"),
+					"duplicate_names": result.get("duplicate_names"),
+					"cancelled": result.get("cancelled"),
+					"skipped": result.get("skipped"),
 					"results": result.get("results"),
 				}
 			return result
 		finally:
+			with self._state_lock:
+				self._masters_cancel = None
+				self._masters_running = False
 			self._masters_lock.release()
+
+	def cancel_masters(self):
+		with self._state_lock:
+			if not self._masters_running or self._masters_cancel is None:
+				return {"cancelled": False, "message": "No masters sync is running"}
+			self._masters_cancel.set()
+			return {"cancelled": True, "message": "Cancelling after the current Tally request"}
 
 	def preview_flow(self, flow_key, limit=20):
 		service = self.make_service(require_flows=False)
@@ -237,6 +261,7 @@ class ControlCentre:
 				"next_auto_sync": self._next_auto_sync,
 				"configuration_error": configuration_error,
 				"last_masters": self._last_masters_result,
+				"masters_running": self._masters_running,
 			}
 
 	def trigger(self, direction="all", flow_keys=None, limit=None, source="manual"):

@@ -83,12 +83,19 @@ def _ledger(name, parent, billwise=False, gstin="", country=""):
 
 
 def _stock_item(item):
+	tally_name = item.get("tally_name") or item.get("item_name") or item["item_code"]
+	names = [{"metadata": True, "type": "String"}, tally_name]
+	for alias in (item["item_code"], f"ERPNext:Item:{item['item_code']}"):
+		if alias and alias.casefold() != tally_name.casefold() and alias not in names:
+			names.append(alias)
 	stock_item = {
-		"metadata": _metadata("Stock Item", item["item_code"]),
-		"name": item["item_code"],
+		"metadata": _metadata("Stock Item", tally_name),
+		"name": tally_name,
 		"parent": item.get("item_group") or "\x04 Primary",
 		"base units": item["stock_uom"],
 		"gsttypeofsupply": "Goods",
+		"partno": item["item_code"],
+		"language name": [{"name": names, "language id": " 1033"}],
 	}
 	if item.get("hsn_code"):
 		stock_item["hsncode"] = item["hsn_code"]
@@ -209,7 +216,7 @@ def build_voucher_import(document, company, target_id):
 			batch["godownname"] = item["warehouse"]
 		voucher["allinventoryentries"].append(
 			{
-				"stockitemname": item["item_code"],
+				"stockitemname": item.get("tally_name") or item.get("item_name") or item["item_code"],
 				"isdeemedpositive": False,
 				"rate": f"{_amount(item['rate'])}/{item['stock_uom']}",
 				"amount": _amount(item["amount"]),

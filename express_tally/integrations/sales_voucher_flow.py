@@ -88,9 +88,11 @@ class SalesDocumentMapper:
 
 	def map_item(self, row, item, company_abbr, default_delivery_date):
 		stock_qty = flt(row.stock_qty) or flt(row.qty)
+		item_name = item.get("item_name") or row.item_name or row.item_code
 		return {
 			"item_code": row.item_code,
-			"item_name": item.get("item_name") or row.item_name or row.item_code,
+			"item_name": item_name,
+			"tally_name": self.tally_item_name(row.item_code, item_name),
 			"description": item.get("description") or row.description or "",
 			"item_group": item.get("item_group") or row.item_group or "",
 			"hsn_code": item.get("gst_hsn_code") or row.get("gst_hsn_code") or "",
@@ -101,6 +103,14 @@ class SalesDocumentMapper:
 			"warehouse": self.clean_company_suffix(row.warehouse, company_abbr),
 			"delivery_date": str(row.get("delivery_date") or default_delivery_date),
 		}
+
+	@staticmethod
+	def tally_item_name(item_code, item_name):
+		"""Match the master-sync rule: item name, with code for duplicates."""
+		display = (item_name or item_code or "").strip()
+		if display and frappe.db.count("Item", {"item_name": display}) > 1:
+			return f"{display} ({item_code})"
+		return display or item_code
 
 	def map_customer(self, document, company_details):
 		return {
