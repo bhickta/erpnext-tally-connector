@@ -42,7 +42,21 @@ function renderMasters(payload) {
     <span class="tag">${dependencies.escapeHtml(master.tally_type || "")}</span>
     <span class="master-count">${dependencies.escapeHtml(countText(master, summary))}</span>
   </label>`).join("");
+  container.querySelectorAll(".master-check").forEach((input) => input.addEventListener("change", updateMasterSelectionCount));
+  updateMasterSelectionCount();
   if (payload.last_result) renderResults(payload.last_result);
+}
+
+function updateMasterSelectionCount() {
+  const total = document.querySelectorAll(".master-check").length;
+  const selected = document.querySelectorAll(".master-check:checked").length;
+  const counter = $("#masters-selected-count");
+  if (counter) counter.textContent = `${selected} of ${total} selected`;
+}
+
+function setMastersSelected(checked) {
+  document.querySelectorAll(".master-check").forEach((input) => { input.checked = checked; });
+  updateMasterSelectionCount();
 }
 
 function renderResults(result) {
@@ -154,5 +168,7 @@ export function initializeMasters(values) {
   $("#refresh-masters")?.addEventListener("click", () => loadMasters(true));
   $("#sync-masters")?.addEventListener("click", syncMasters);
   $("#cancel-masters")?.addEventListener("click", cancelSync);
+  $("#select-masters")?.addEventListener("click", () => setMastersSelected(true));
+  $("#clear-masters")?.addEventListener("click", () => setMastersSelected(false));
   loadMasters();
 }
