@@ -14,8 +14,9 @@ altered by name.
 | Customers | `Customer` | `Ledger` under `Sundry Debtors` |
 | Suppliers | `Supplier` | `Ledger` under `Sundry Creditors` |
 
-`Item` automatically includes the units and item-group hierarchy used by the
-items. The other groups have no extra dependencies.
+`Item` automatically includes **all UOMs** (including disabled units that an
+active item may reference) and the item-group hierarchy. The other groups have
+no extra dependencies.
 
 ## Alias contract
 

@@ -687,7 +687,7 @@ def build_master_sync_summary(company):
 		"Customer": frappe.db.count("Customer", {"disabled": 0}),
 		"Supplier": frappe.db.count("Supplier", {"disabled": 0}),
 		"Item Group": frappe.db.count("Item Group"),
-		"UOM": frappe.db.count("UOM", {"enabled": 1}),
+		"UOM": frappe.db.count("UOM"),
 	}
 
 
@@ -727,9 +727,10 @@ def build_master_sync_payload(
 	skipped = []
 
 	if "Item" in selected:
+		# Include every UOM, including disabled ones that an active item may
+		# still reference. Tally needs the unit before the stock item.
 		uom_rows = frappe.get_all(
 			"UOM",
-			filters={"enabled": 1},
 			fields=["name", "uom_name", "must_be_whole_number"],
 			order_by="name",
 		)
