@@ -14,6 +14,7 @@ from .collection_gateway import (
 	parse_collection_export,
 	scalar,
 )
+from .common import parse_number
 from .profiles import AgentProfile
 
 MASTER_COLLECTIONS = (
@@ -691,9 +692,7 @@ def integer(value):
 
 
 def number(value):
-	text = str(value or "0").strip().replace(",", "")
-	match = __import__("re").search(r"[-+]?\d+(?:\.\d+)?", text)
-	return float(match.group(0)) if match else 0.0
+	return parse_number(value)
 
 
 def tally_balance(value):

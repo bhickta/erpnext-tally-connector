@@ -1,7 +1,5 @@
 """Standard TDL-free Tally master and voucher imports for the Control Centre."""
 
-import hashlib
-import json
 import re
 import uuid
 from collections.abc import Mapping
@@ -10,25 +8,20 @@ from typing import ClassVar
 import frappe
 from frappe.utils import now_datetime
 
+from express_tally.bridge.common import SUCCESS_STATUSES, is_success_status, parse_number, stable_digest
 from express_tally.framework import InboundFlow
 from express_tally.framework.sync_log import sync_idempotency_key
 
 ALLOWED_ROLES = frozenset({"Tally Sync User", "Accounts Manager", "System Manager"})
-SUCCESS_STATUSES = {"success", "already exists", "skipped"}
 
 
 def _number(value):
-	import re
-
-	match = re.search(r"[-+]?\d+(?:\.\d+)?", str(value or "0").replace(",", ""))
-	return float(match.group(0)) if match else 0.0
+	return parse_number(value)
 
 
 def _source_hash(record):
 	stable_record = {key: value for key, value in record.items() if not key.startswith("_previous_")}
-	return hashlib.sha256(
-		json.dumps(stable_record, sort_keys=True, separators=(",", ":"), default=str).encode()
-	).hexdigest()
+	return stable_digest(stable_record)
 
 
 def _success_result(record, doctype="", name="", status="Success", message=""):
@@ -82,7 +75,7 @@ class InboundLog:
 		)
 
 	def record(self, context, record, result, operation="Create"):
-		status = "Success" if str(result.get("status", "")).lower() in SUCCESS_STATUSES else "Failed"
+		status = "Success" if is_success_status(result.get("status")) else "Failed"
 		idempotency_key = None
 		if status == "Success":
 			idempotency_key = sync_idempotency_key(

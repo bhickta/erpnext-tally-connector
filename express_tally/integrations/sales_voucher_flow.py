@@ -1,12 +1,9 @@
 """Reusable ERPNext sales-document flow for inventory Sales vouchers."""
 
-import hashlib
-import json
-import re
-
 import frappe
 from frappe.utils import flt
 
+from express_tally.bridge.common import clean_company_suffix, stable_digest
 from express_tally.framework import OutboundFlow, OutboundSyncLog, SourceSpec
 
 DEFAULT_SOURCES = (
@@ -172,15 +169,11 @@ class SalesDocumentMapper:
 
 	@staticmethod
 	def clean_company_suffix(value, company_abbr):
-		value = (value or "").strip()
-		if company_abbr:
-			value = re.sub(rf"\s+-\s+{re.escape(company_abbr)}$", "", value).strip()
-		return value
+		return clean_company_suffix(value, company_abbr)
 
 	@staticmethod
 	def source_hash(payload):
-		content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-		return hashlib.sha256(content.encode()).hexdigest()
+		return stable_digest(payload, ensure_ascii=False)
 
 
 class SalesDocumentsToTallyFlow(OutboundFlow):
