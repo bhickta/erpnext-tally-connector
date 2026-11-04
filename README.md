@@ -6,9 +6,10 @@ state, a manual ERPNext exporter, and a standalone Windows Control Centre with
 manual and automatic synchronization plus pluggable Tally-side execution profiles. Company apps contribute only their selection,
 mapping, eligibility, and document-creation policy.
 
-The original Tally-to-ERPNext migration endpoints remain available for masters
-(Account, Customer, Supplier, Contact, Address) and transactions (Purchase
-Invoice, Sales Invoice, Payment Entry, Journal Entry).
+The original Tally-to-ERPNext migration endpoints are retired and kept only for
+historical reference in [`archive/legacy_tally_api/`](archive/legacy_tally_api/);
+they are no longer installed or whitelisted. The supported API is the flow
+framework endpoints documented below.
 
 ## Prerequisites
 
@@ -60,8 +61,9 @@ field mapping, API, and limitations.
 ## Bidirectional flow framework
 
 The `express_tally.framework` package provides a versioned API and extension
-contract for company apps. Existing migration endpoints remain available and
-are not routed through the framework yet.
+contract for company apps. The retired legacy migration modules are archived
+under [`archive/legacy_tally_api/`](archive/legacy_tally_api/) and are not part
+of the supported runtime.
 
 An installed app can register one or more flows in its `hooks.py`:
 
