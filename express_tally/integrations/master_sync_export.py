@@ -30,9 +30,13 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
-MASTER_SYNC_TYPES = ("Item", "Warehouse", "Customer", "Supplier")
+from .tally_export import DEFAULT_ACCOUNT_GROUPS
+
+MASTER_SYNC_TYPES = ("Group", "Ledger", "Item", "Warehouse", "Customer", "Supplier")
 
 MASTER_SYNC_LABELS = {
+	"Group": "Accounting groups",
+	"Ledger": "Ledgers",
 	"Item": "Items",
 	"Warehouse": "Warehouses",
 	"Customer": "Customers",
@@ -40,10 +44,38 @@ MASTER_SYNC_LABELS = {
 }
 
 TALLY_MASTER_TYPES = {
+	"Group": "Group",
+	"Ledger": "Ledger",
 	"Item": "Stock Item",
 	"Warehouse": "Godown",
 	"Customer": "Ledger",
 	"Supplier": "Ledger",
+}
+
+# TallyPrime's predefined accounting groups. These are not created as custom
+# masters; ERPNext account groups that match them are used as parents.
+TALLY_STANDARD_GROUPS = {
+	*DEFAULT_ACCOUNT_GROUPS.values(),
+	"Capital Account",
+	"Loans (Liability)",
+	"Current Liabilities",
+	"Fixed Assets",
+	"Current Assets",
+	"Investments",
+	"Loans & Advances (Asset)",
+	"Misc. Expenses (ASSET)",
+	"Sales Accounts",
+	"Purchase Accounts",
+	"Direct Incomes",
+	"Indirect Incomes",
+	"Direct Expenses",
+	"Indirect Expenses",
+	"Bank Accounts",
+	"Cash-in-Hand",
+	"Sundry Debtors",
+	"Sundry Creditors",
+	"Duties & Taxes",
+	"Stock-in-Hand",
 }
 
 PARTY_PARENT = {
@@ -273,6 +305,78 @@ def _stock_group_message(row):
 			)
 		},
 	)
+
+
+# ---------------------------------------------------------------------------
+# Accounting Group / Ledger
+# ---------------------------------------------------------------------------
+
+
+def _account_parent(account, by_name, company_abbr):
+	parent = by_name.get(account.get("parent_account"))
+	if parent and parent.get("parent_account"):
+		return _clean_name(parent.get("account_name") or parent.get("name"), company_abbr)
+	return DEFAULT_ACCOUNT_GROUPS.get(account.get("account_type")) or {
+		"Asset": "Current Assets",
+		"Liability": "Current Liabilities",
+		"Equity": "Capital Account",
+		"Income": "Indirect Incomes",
+		"Expense": "Indirect Expenses",
+	}.get(account.get("root_type"), "Current Assets")
+
+
+def _account_messages(accounts, company_abbr, include_disabled=False, company_currency=None):
+	"""Return Tally Group and Ledger masters for the ERPNext chart of accounts."""
+	by_name = {row["name"]: row for row in accounts}
+	groups = []
+	ledgers = []
+	for account in accounts:
+		if not account.get("parent_account"):
+			continue
+		if account.get("disabled") and not include_disabled:
+			continue
+		name = _clean_name(account.get("account_name") or account["name"], company_abbr)
+		parent = _account_parent(account, by_name, company_abbr)
+		aliases = _alias_list(
+			name, _identity_alias(name, account["name"], "Account")
+		)
+		if cint(account.get("is_group")):
+			if name in TALLY_STANDARD_GROUPS:
+				# Use Tally's predefined group as the parent for its children.
+				continue
+			message = _message(
+				"Group",
+				name,
+				parent=parent,
+				isbillwiseon=False,
+				iscostcentreson=False,
+				isaddable=True,
+				isrevenue=account.get("root_type") == "Income",
+				affectsstock=False,
+				**{"language name": aliases},
+			)
+			if account.get("disabled"):
+				message["isdeleted"] = True
+			groups.append(message)
+			continue
+		message = _message(
+			"Ledger",
+			name,
+			parent=parent,
+			isbillwiseon=account.get("account_type") in ("Receivable", "Payable"),
+			iscostcentreson=False,
+			affectsstock=False,
+			isgstapplicable=False,
+			ledgercode=account.get("account_number") or account["name"],
+			**{"language name": aliases},
+		)
+		currency = account.get("account_currency")
+		if currency and company_currency and currency != company_currency:
+			message["currency"] = currency
+		if account.get("disabled"):
+			message["isdeleted"] = True
+		ledgers.append(message)
+	return groups, ledgers
 
 
 # ---------------------------------------------------------------------------
@@ -682,6 +786,12 @@ def build_master_sync_summary(company):
 	if not frappe.db.exists("Company", company):
 		frappe.throw(_("Company {0} does not exist").format(frappe.bold(company)))
 	return {
+		"Group": frappe.db.count(
+			"Account", {"company": company, "is_group": 1, "disabled": 0}
+		),
+		"Ledger": frappe.db.count(
+			"Account", {"company": company, "is_group": 0, "disabled": 0}
+		),
 		"Item": frappe.db.count("Item", {"disabled": 0}),
 		"Warehouse": frappe.db.count("Warehouse", {"company": company, "disabled": 0}),
 		"Customer": frappe.db.count("Customer", {"disabled": 0}),
@@ -725,6 +835,48 @@ def build_master_sync_payload(
 	batches = []
 	item_messages = []
 	skipped = []
+
+	if "Group" in selected or "Ledger" in selected:
+		account_fields = [
+			"name",
+			"account_name",
+			"parent_account",
+			"is_group",
+			"root_type",
+			"account_type",
+			"account_currency",
+			"disabled",
+		]
+		if _has_column("Account", "account_number"):
+			account_fields.append("account_number")
+		accounts = frappe.get_all(
+			"Account",
+			filters={"company": company},
+			fields=account_fields,
+			order_by="lft",
+		)
+		company_currency = frappe.get_cached_value("Company", company, "default_currency")
+		account_groups, account_ledgers = _account_messages(
+			accounts,
+			company_abbr,
+			include_disabled=include_disabled,
+			company_currency=company_currency,
+		)
+		batches.append(
+			{
+				"key": "account_groups",
+				"label": "Accounting groups",
+				"tallymessage": account_groups,
+			}
+		)
+		if "Ledger" in selected:
+			batches.append(
+				{
+					"key": "account_ledgers",
+					"label": "Ledgers",
+					"tallymessage": account_ledgers,
+				}
+			)
 
 	if "Item" in selected:
 		# Include every UOM, including disabled ones that an active item may
@@ -841,13 +993,26 @@ def build_master_sync_payload(
 	if limit:
 		for batch in batches:
 			# Keep dependency batches complete so a limited test still has the
-			# units and groups referenced by the selected items.
-			if batch["key"] in {"warehouses", "customers", "suppliers", "items"}:
+			# units/groups referenced by the selected masters.
+			if batch["key"] == "account_groups" and "Ledger" in selected:
+				continue
+			if batch["key"] in {
+				"account_groups",
+				"account_ledgers",
+				"warehouses",
+				"customers",
+				"suppliers",
+				"items",
+			}:
 				batch["tallymessage"] = batch["tallymessage"][:limit]
 
 	counts = {key: 0 for key in MASTER_SYNC_TYPES}
 	for batch in batches:
-		if batch["key"] == "items":
+		if batch["key"] == "account_groups":
+			counts["Group"] = len(batch["tallymessage"])
+		elif batch["key"] == "account_ledgers":
+			counts["Ledger"] = len(batch["tallymessage"])
+		elif batch["key"] == "items":
 			counts["Item"] = len(batch["tallymessage"])
 		elif batch["key"] == "warehouses":
 			counts["Warehouse"] = len(batch["tallymessage"])

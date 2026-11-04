@@ -98,6 +98,85 @@ class TestNamePolicy(TestCase):
 		self.assertEqual(message["parent"], export.TALLY_PRIMARY)
 
 
+class TestAccountMapping(TestCase):
+	def test_groups_and_ledgers_map_with_aliases_and_parents(self):
+		accounts = [
+			{
+				"name": "Application of Funds (Assets)",
+				"account_name": "Application of Funds (Assets)",
+				"parent_account": "",
+				"is_group": 1,
+				"root_type": "Asset",
+				"account_type": "",
+				"account_currency": "INR",
+				"disabled": 0,
+			},
+			{
+				"name": "Current Assets",
+				"account_name": "Current Assets",
+				"parent_account": "Application of Funds (Assets)",
+				"is_group": 1,
+				"root_type": "Asset",
+				"account_type": "",
+				"account_currency": "INR",
+				"disabled": 0,
+			},
+			{
+				"name": "Debtors",
+				"account_name": "Debtors",
+				"parent_account": "Current Assets",
+				"is_group": 1,
+				"root_type": "Asset",
+				"account_type": "Receivable",
+				"account_currency": "INR",
+				"disabled": 0,
+			},
+			{
+				"name": "Cash",
+				"account_name": "Cash",
+				"parent_account": "Application of Funds (Assets)",
+				"is_group": 0,
+				"root_type": "Asset",
+				"account_type": "Cash",
+				"account_currency": "INR",
+				"disabled": 0,
+			},
+			{
+				"name": "Bank USD",
+				"account_name": "Bank USD",
+				"parent_account": "Current Assets",
+				"is_group": 0,
+				"root_type": "Asset",
+				"account_type": "Bank",
+				"account_currency": "USD",
+				"disabled": 0,
+				"account_number": "123",
+			},
+		]
+
+		groups, ledgers = export._account_messages(accounts, "TC", company_currency="INR")
+		group_names = {row["name"]: row for row in groups}
+		ledger_names = {row["name"]: row for row in ledgers}
+
+		# Tally's standard Current Assets group is reused, not duplicated.
+		self.assertNotIn("Current Assets", group_names)
+		self.assertIn("Debtors", group_names)
+		self.assertEqual(group_names["Debtors"]["parent"], "Current Assets")
+		self.assertIn(
+			"ERPNext:Account:Debtors", group_names["Debtors"]["language name"][0]["name"]
+		)
+
+		self.assertEqual(ledger_names["Cash"]["parent"], "Cash-in-Hand")
+		self.assertEqual(ledger_names["Cash"]["ledgercode"], "Cash")
+		self.assertFalse(ledger_names["Cash"]["isbillwiseon"])
+		self.assertEqual(ledger_names["Bank USD"]["currency"], "USD")
+		self.assertEqual(ledger_names["Bank USD"]["ledgercode"], "123")
+		self.assertIn(
+			"ERPNext:Account:Bank USD",
+			ledger_names["Bank USD"]["language name"][0]["name"],
+		)
+
+
 class TestPartyMapping(TestCase):
 	def test_customer_ledger_maps_identity_gst_address_and_contact(self):
 		customer = {

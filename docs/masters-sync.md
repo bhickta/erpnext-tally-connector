@@ -9,14 +9,17 @@ altered by name.
 
 | Control Centre group | ERPNext source | Tally destination |
 | --- | --- | --- |
+| Accounting groups | `Account` where `is_group = 1` | `Group` |
+| Ledgers | `Account` where `is_group = 0` | `Ledger` |
 | Items | `Item` (plus `Item Group` and `UOM`) | `Stock Item` (plus `Stock Group` and `Unit`) |
 | Warehouses | `Warehouse` | `Godown` |
 | Customers | `Customer` | `Ledger` under `Sundry Debtors` |
 | Suppliers | `Supplier` | `Ledger` under `Sundry Creditors` |
 
-`Item` automatically includes **all UOMs** (including disabled units that an
-active item may reference) and the item-group hierarchy. The other groups have
-no extra dependencies.
+`Ledger` automatically includes the accounting-group hierarchy. `Item`
+automatically includes **all UOMs** (including disabled units that an active
+item may reference) and the item-group hierarchy. `Warehouse`, `Customer` and
+`Supplier` have no extra dependencies.
 
 ## Alias contract
 
@@ -26,6 +29,8 @@ the remaining names are aliases.
 
 | Master | Tally name | Alias values |
 | --- | --- | --- |
+| Group | ERPNext `account_name` without the company abbreviation | raw ERPNext `name`, then `ERPNext:Account:<name>` |
+| Ledger | ERPNext `account_name` without the company abbreviation | raw ERPNext `name`, then `ERPNext:Account:<name>` |
 | Item | ERPNext `item_name` (or `item_code` when blank) | item `item_code`, then `ERPNext:Item:<item_code>` |
 | Warehouse | `warehouse_name` without the company abbreviation | raw ERPNext `name`, then `ERPNext:Warehouse:<name>` |
 | Customer | `customer_name` | raw ERPNext `name` when different, then `ERPNext:Customer:<name>` |
@@ -48,6 +53,27 @@ Duplicate display names are resolved as follows:
   ERPNext ID to every colliding record. `skip` is the default.
 
 ## Field mapping
+
+### Group → Tally Group
+
+- `name`: ERPNext `account_name` with the company abbreviation removed
+- `parent`: parent account group; standard Tally groups such as
+  `Current Assets`, `Bank Accounts`, `Sundry Debtors`, `Duties & Taxes` are
+  reused instead of duplicated
+- `isrevenue`: true for income groups
+- `isaddable`: true
+- `iscostcentreson`, `affectsstock`: false
+- `isdeleted`: disabled groups, when **Include disabled records** is enabled
+
+### Ledger → Tally Ledger
+
+- `name`: ERPNext `account_name` with the company abbreviation removed
+- `parent`: parent account group, or the mapped standard Tally group
+- `isbillwiseon`: true for Receivable and Payable accounts
+- `iscostcentreson`: false
+- `ledgercode`: ERPNext `account_number` when present, otherwise the ERPNext `name`
+- `currency`: non-company account currency when present
+- `isdeleted`: disabled ledgers, when **Include disabled records** is enabled
 
 ### Item → Stock Item
 
@@ -120,7 +146,7 @@ Duplicate display names are resolved as follows:
 The bridge imports dependency batches in this order:
 
 ```text
-units -> item groups -> warehouses -> customers -> suppliers -> items
+account groups -> account ledgers -> units -> item groups -> warehouses -> customers -> suppliers -> items
 ```
 
 Each batch is split into requests of up to 250 masters. A failed request stops
@@ -138,7 +164,7 @@ Example body:
 
 ```json
 {
-  "masters": ["Item", "Warehouse", "Customer", "Supplier"],
+  "masters": ["Group", "Ledger", "Item", "Warehouse", "Customer", "Supplier"],
   "include_disabled": false,
   "include_opening_balances": false,
   "limit": null,

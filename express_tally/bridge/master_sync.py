@@ -7,6 +7,18 @@ from .clients import BridgeRequestError
 
 MASTER_TYPES = (
 	{
+		"key": "Group",
+		"label": "Accounting groups",
+		"tally_type": "Group",
+		"description": "Chart-of-accounts groups",
+	},
+	{
+		"key": "Ledger",
+		"label": "Ledgers",
+		"tally_type": "Ledger",
+		"description": "Chart-of-accounts ledgers (includes groups)",
+	},
+	{
 		"key": "Item",
 		"label": "Items",
 		"tally_type": "Stock Item",
