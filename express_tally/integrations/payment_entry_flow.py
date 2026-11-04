@@ -1,18 +1,17 @@
 """Posted ERPNext payment accounting exported as Tally accounting vouchers."""
 
-import hashlib
-import json
 from decimal import Decimal
 
 import frappe
 
+from express_tally.bridge.common import stable_digest, to_money
 from express_tally.framework import OutboundFlow, OutboundSyncLog, SourceSpec
 
 PAYMENT_FLOW = "express_tally.payment_entries_to_tally"
 
 
 def money(value):
-	return Decimal(str(value or 0)).quantize(Decimal("0.01"))
+	return to_money(value)
 
 
 class PaymentEntryMapper:
@@ -60,9 +59,7 @@ class PaymentEntryMapper:
 				order_by="creation, name",
 			)
 			payload.update(self.map_ledger_entries(rows, doc.company))
-		payload["source_hash"] = hashlib.sha256(
-			json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
-		).hexdigest()
+		payload["source_hash"] = stable_digest(payload, ensure_ascii=False)
 		return payload
 
 	def map_ledger_entries(

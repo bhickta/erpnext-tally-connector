@@ -1,13 +1,12 @@
 """Bidirectional financial-ledger mirrors with explicit, balanced ledger scopes."""
 
-import hashlib
-import json
 from datetime import date
 from decimal import Decimal
 from typing import ClassVar
 
 import frappe
 
+from express_tally.bridge.common import stable_digest
 from express_tally.framework import OutboundFlow, OutboundSyncLog, SourceSpec
 from express_tally.integrations.payment_entry_flow import PaymentEntryMapper
 from express_tally.integrations.tally_export import DEFAULT_ACCOUNT_GROUPS
@@ -33,9 +32,7 @@ GL_DOCTYPES = (
 
 
 def digest(value):
-	return hashlib.sha256(
-		json.dumps(value, sort_keys=True, default=str, separators=(",", ":")).encode()
-	).hexdigest()
+	return stable_digest(value)
 
 
 def fiscal_start(context):

@@ -13,7 +13,17 @@ const api = async (path, options = {}) => {
   return payload;
 };
 
-const state = { config: {}, flows: [], status: {}, masters: {}, toastTimer: null };
+const state = {
+  config: {},
+  flows: [],
+  status: {},
+  masters: {},
+  toastTimer: null,
+  flowFilter: "",
+  flowSelection: null,
+  historyFilter: "",
+  historyDirection: "",
+};
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({
@@ -46,8 +56,8 @@ function formatTime(value) {
   return Number.isNaN(date.valueOf()) ? value : date.toLocaleString();
 }
 
-function historyTable(entries, compact = false) {
-  if (!entries?.length) return '<div class="empty">No synchronization runs have been recorded yet.</div>';
+function historyTable(entries, compact = false, emptyMessage = "No synchronization runs have been recorded yet.") {
+  if (!entries?.length) return `<div class="empty">${escapeHtml(emptyMessage)}</div>`;
   const rows = entries.slice(0, compact ? 5 : 100).map((entry) => {
     const success = !entry.error && !entry.failed;
     const result = success
@@ -81,7 +91,29 @@ function renderStatus() {
   alert.classList.toggle("hidden", !state.status.configuration_error);
   alert.textContent = state.status.configuration_error ? `${state.status.configuration_error}. Complete Settings and Sync flows before running.` : "";
   $("#recent-history").innerHTML = historyTable(state.status.history || [], true);
-  $("#full-history").innerHTML = historyTable(state.status.history || []);
+  renderHistory();
+}
+
+function filteredHistory() {
+  const term = state.historyFilter.trim().toLowerCase();
+  return (state.status.history || []).filter((entry) => {
+    if (state.historyDirection && entry.direction !== state.historyDirection) return false;
+    if (!term) return true;
+    return [entry.flow, entry.direction, entry.source, entry.error, entry.at]
+      .join(" ")
+      .toLowerCase()
+      .includes(term);
+  });
+}
+
+function renderHistory() {
+  const entries = filteredHistory();
+  $("#history-count").textContent = `${entries.length} run${entries.length === 1 ? "" : "s"}`;
+  $("#full-history").innerHTML = historyTable(
+    entries,
+    false,
+    "No synchronization runs match the current filters.",
+  );
 }
 
 async function loadState() {
@@ -177,20 +209,68 @@ async function saveSettings(showSuccess = true) {
   await loadState();
 }
 
-async function loadFlows(showToast = false) {
-  const response = await api("/api/v1/flows", { allowError: true });
-  state.flows = response.flows || [];
-  const selected = new Set(state.config.enabled_flows || (state.config.flow_name ? [state.config.flow_name] : []));
-  $("#flows-list").innerHTML = state.flows.length ? state.flows.map((flow) => `<label class="flow-row ${flow.available ? "" : "unavailable"}">
+function configuredFlowSelection() {
+  return new Set(state.config.enabled_flows || (state.config.flow_name ? [state.config.flow_name] : []));
+}
+
+function currentFlowSelection() {
+  if (!state.flowSelection) state.flowSelection = configuredFlowSelection();
+  return state.flowSelection;
+}
+
+function flowMatchesSearch(flow, term) {
+  if (!term) return true;
+  return [flow.title, flow.key, flow.direction, flow.agent_profile, flow.unavailable_reason]
+    .join(" ")
+    .toLowerCase()
+    .includes(term);
+}
+
+function renderFlows(errorMessage = "") {
+  const term = state.flowFilter.trim().toLowerCase();
+  const selected = currentFlowSelection();
+  const visible = state.flows.filter((flow) => flowMatchesSearch(flow, term));
+  $("#flow-count").textContent = `${visible.length} of ${state.flows.length} flow${state.flows.length === 1 ? "" : "s"}`;
+  if (!state.flows.length) {
+    $("#flows-list").innerHTML = `<div class="empty">${escapeHtml(errorMessage || "No flows are registered in ERPNext.")}</div>`;
+    return;
+  }
+  if (!visible.length) {
+    $("#flows-list").innerHTML = '<div class="empty">No flows match your search.</div>';
+    return;
+  }
+  $("#flows-list").innerHTML = visible.map((flow) => `<label class="flow-row ${flow.available ? "" : "unavailable"}">
     <input class="flow-check" type="checkbox" value="${escapeHtml(flow.key)}" ${selected.has(flow.key) ? "checked" : ""} ${flow.available ? "" : "disabled"} />
     <span><strong>${escapeHtml(flow.title || flow.key)}</strong><small>${escapeHtml(flow.available ? flow.key : flow.unavailable_reason)}</small></span>
     <span class="flow-direction">${escapeHtml(directionLabel(flow.direction))}</span>
-  </label>`).join("") : `<div class="empty">${escapeHtml(response.error || "No flows are registered in ERPNext.")}</div>`;
+  </label>`).join("");
+  $$(".flow-check").forEach((input) => input.addEventListener("change", () => {
+    if (input.checked) selected.add(input.value);
+    else selected.delete(input.value);
+  }));
+}
+
+async function loadFlows(showToast = false) {
+  const response = await api("/api/v1/flows", { allowError: true });
+  state.flows = response.flows || [];
+  state.flowSelection = configuredFlowSelection();
+  renderFlows(response.error || "");
   if (showToast) toast(response.error ? response.error : `${state.flows.length} flow(s) loaded.`, Boolean(response.error));
 }
 
+function selectAvailableFlows() {
+  const selected = currentFlowSelection();
+  state.flows.filter((flow) => flow.available).forEach((flow) => selected.add(flow.key));
+  renderFlows();
+}
+
+function clearFlowSelection() {
+  state.flowSelection = new Set();
+  renderFlows();
+}
+
 async function saveFlows() {
-  const enabled = $$(".flow-check:checked").map((input) => input.value);
+  const enabled = [...currentFlowSelection()];
   const groups = new Map();
   enabled.forEach((key) => {
     const flow = state.flows.find((entry) => entry.key === key);
@@ -202,6 +282,8 @@ async function saveFlows() {
   });
   const response = await api("/api/v1/config", { method: "PUT", body: JSON.stringify({ enabled_flows: enabled, flow_name: "" }) });
   state.config = response.config;
+  state.flowSelection = configuredFlowSelection();
+  renderFlows();
   toast("Enabled flows saved.");
   await loadState();
 }
@@ -242,6 +324,11 @@ function wireEvents() {
     try { await saveSettings(); } catch (error) { toast(error.message, true); }
   });
   $("#refresh-flows").addEventListener("click", () => loadFlows(true));
+  $("#flow-search").addEventListener("input", (event) => { state.flowFilter = event.target.value; renderFlows(); });
+  $("#select-flows").addEventListener("click", selectAvailableFlows);
+  $("#clear-flows").addEventListener("click", clearFlowSelection);
+  $("#history-search").addEventListener("input", (event) => { state.historyFilter = event.target.value; renderHistory(); });
+  $("#history-direction").addEventListener("change", (event) => { state.historyDirection = event.target.value; renderHistory(); });
 	$("#stop-bridge").addEventListener("click", async () => {
 	  if (!window.confirm("Stop the local bridge? The Control Centre will close until it is restarted.")) return;
 	  try {

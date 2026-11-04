@@ -1,11 +1,12 @@
 """Export ERPNext masters in TallyPrime 7 native JSON format."""
 
 import json
-import re
 
 import frappe
 from frappe import _
 from frappe.utils import cint, flt, formatdate, getdate
+
+from express_tally.bridge.common import clean_company_suffix as _clean_name
 
 
 SUPPORTED_MASTER_DOCTYPES = (
@@ -62,13 +63,6 @@ def _voucher_metadata(name):
 		"objview": "Invoice Voucher View",
 		"remoteid": f"ERPNext-Sales-Order-{name}",
 	}
-
-
-def _clean_name(value, company_abbr=None):
-	value = (value or "").strip()
-	if company_abbr:
-		value = re.sub(rf"\s+-\s+{re.escape(company_abbr)}$", "", value).strip()
-	return value
 
 
 def _company_abbr(company):

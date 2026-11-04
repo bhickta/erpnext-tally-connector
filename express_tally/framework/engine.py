@@ -1,6 +1,7 @@
 """Direction-neutral orchestration around registered integration flows."""
 
 import json
+import logging
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -11,6 +12,7 @@ from .diagnostics import sync_activity
 from .registry import FlowRegistry
 
 
+LOGGER = logging.getLogger("express_tally.framework")
 MAX_BATCH_SIZE = 100
 TARGET_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,139}$")
 
@@ -86,6 +88,7 @@ class FlowEngine:
 		documents = list(flow.pull(context, limit))
 		if len(documents) > limit:
 			raise ValueError(f"Tally flow {flow_key} returned more than the requested limit")
+		LOGGER.info("Flow %s pulled %s document(s) for %s", flow_key, len(documents), context.company)
 		return {
 			"schema_version": flow.schema_version,
 			"flow": flow.key,
@@ -103,7 +106,9 @@ class FlowEngine:
 			raise ValueError(f"Tally flow {flow_key} does not support acknowledgement")
 		context = self._with_default_options(flow, context)
 		flow.authorize("acknowledge")
-		response = dict(flow.acknowledge(context, parse_sequence(results, "results")))
+		parsed_results = parse_sequence(results, "results")
+		response = dict(flow.acknowledge(context, parsed_results))
+		LOGGER.info("Flow %s acknowledged %s result(s)", flow_key, len(parsed_results))
 		return {"flow": flow.key, **response}
 
 	def receive(self, flow_key: str, context: FlowContext, records: Any) -> dict[str, Any]:
@@ -113,6 +118,7 @@ class FlowEngine:
 		context = self._with_default_options(flow, context)
 		flow.authorize("receive")
 		results = list(flow.receive(context, parse_sequence(records, "records")))
+		LOGGER.info("Flow %s received %s record(s) for %s", flow_key, len(results), context.company)
 		return {
 			"schema_version": flow.schema_version,
 			"flow": flow.key,

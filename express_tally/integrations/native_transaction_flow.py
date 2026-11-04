@@ -8,6 +8,7 @@ import frappe
 
 from express_tally.bridge.bill_references import dated_bill_key
 from express_tally.bridge.collection_gateway import scalar
+from express_tally.bridge.common import to_money
 from express_tally.integrations.tally_inbound_flows import (
 	TallyVouchersToERPNextFlow,
 	_success_result,
@@ -21,7 +22,7 @@ class UnresolvedBillReference(ValueError):
 
 
 def money(value):
-	return Decimal(str(value or 0)).quantize(Decimal("0.01"))
+	return to_money(value)
 
 
 class NativeTransactionsFromTallyFlow(TallyVouchersToERPNextFlow):

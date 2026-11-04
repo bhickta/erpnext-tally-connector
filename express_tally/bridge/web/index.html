@@ -89,6 +89,14 @@
           <article class="panel">
             <div class="panel-heading"><div><p class="eyebrow">REGISTERED IN ERPNEXT</p><h2>Synchronization flows</h2></div><button class="button secondary" id="refresh-flows">Refresh</button></div>
             <p class="muted">Enable the flows this computer is responsible for. A matching local agent profile is required for each direction.</p>
+            <div class="list-toolbar">
+              <label class="search-field"><span class="visually-hidden">Search flows</span><input id="flow-search" type="search" placeholder="Search by name, key, or direction" autocomplete="off" /></label>
+              <div class="list-toolbar-actions">
+                <span class="tag" id="flow-count" aria-live="polite">0 flows</span>
+                <button class="button secondary small" id="select-flows" type="button">Select available</button>
+                <button class="button secondary small" id="clear-flows" type="button">Clear</button>
+              </div>
+            </div>
             <div id="flows-list" class="flows-list"><div class="empty">Connect ERPNext to discover flows.</div></div>
             <div class="form-actions"><button class="button primary" id="save-flows">Save enabled flows</button></div>
           </article>
@@ -102,6 +110,13 @@
             </div>
             <p class="muted">Push Accounting Groups, Ledgers, Item, Warehouse, Customer and Supplier masters to TallyPrime. Each Tally master stores the ERPNext identity in its alias field so records can be matched later. Ledger sync includes the account group hierarchy; Item sync also pushes Item Groups and Units.</p>
             <div id="masters-error" class="alert hidden"></div>
+            <div class="list-toolbar compact">
+              <span class="tag" id="masters-selected-count" aria-live="polite">0 selected</span>
+              <div class="list-toolbar-actions">
+                <button class="button secondary small" id="select-masters" type="button">Select all</button>
+                <button class="button secondary small" id="clear-masters" type="button">Clear</button>
+              </div>
+            </div>
             <div id="masters-list" class="masters-list"><div class="empty">Connect ERPNext to load master counts.</div></div>
             <div class="masters-actions">
               <label class="check"><input id="masters-include-disabled" type="checkbox" /> Include disabled records</label>
@@ -124,6 +139,11 @@
         <section class="page" data-page-panel="history">
           <article class="panel">
             <div class="panel-heading"><div><p class="eyebrow">AUDIT TRAIL</p><h2>Synchronization history</h2></div></div>
+            <div class="list-toolbar">
+              <label class="search-field"><span class="visually-hidden">Search history</span><input id="history-search" type="search" placeholder="Search by flow, source, or error" autocomplete="off" /></label>
+              <label class="inline-field">Direction<select id="history-direction"><option value="">All directions</option><option value="erpnext_to_tally">ERPNext → Tally</option><option value="tally_to_erpnext">Tally → ERPNext</option></select></label>
+              <span class="tag" id="history-count" aria-live="polite">0 runs</span>
+            </div>
             <div id="full-history"></div>
           </article>
         </section>

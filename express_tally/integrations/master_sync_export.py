@@ -30,6 +30,8 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
+from express_tally.bridge.common import clean_company_suffix as _clean_name
+
 from .tally_export import DEFAULT_ACCOUNT_GROUPS
 
 MASTER_SYNC_TYPES = ("Group", "Ledger", "Item", "Warehouse", "Customer", "Supplier")
@@ -102,13 +104,6 @@ GST_REGISTRATION_TYPE = {
 
 TALLY_PRIMARY = "\x04 Primary"
 TALLY_NOT_APPLICABLE = "\x04 Not Applicable"
-
-
-def _clean_name(value, company_abbr=None):
-	value = (value or "").strip()
-	if company_abbr:
-		value = re.sub(rf"\s+-\s+{re.escape(company_abbr)}$", "", value).strip()
-	return value
 
 
 def _text(value):
