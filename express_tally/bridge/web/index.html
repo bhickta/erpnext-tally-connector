@@ -109,6 +109,7 @@
               <label class="masters-limit">Limit per group<input id="masters-limit" type="number" min="1" placeholder="All" /></label>
               <label class="masters-limit">Duplicate names<select id="masters-duplicate-names"><option value="skip">Skip duplicates</option><option value="suffix">Add ERPNext ID</option></select></label>
               <button class="button primary" id="sync-masters">Sync selected to Tally</button>
+              <button class="button danger hidden" id="cancel-masters">Cancel sync</button>
             </div>
           </article>
           <article class="panel">
@@ -205,6 +206,21 @@
 			  <p class="field-note">Enable only when Tally is the inventory source of truth for these invoices.</p>
               <label class="check"><input name="open_browser_on_start" type="checkbox" /> Open Control Centre when the connector starts</label>
 			  <label class="check"><input name="start_with_windows" type="checkbox" /> Start the connector automatically with Windows</label>
+            </div>
+            <div class="form-section">
+              <h3>Masters sync</h3>
+              <div class="form-grid">
+                <label>Customer ledger group<input name="customer_parent" required /></label>
+                <label>Supplier ledger group<input name="supplier_parent" required /></label>
+                <label>Master batch size<input name="master_batch_size" type="number" min="1" max="1000" required /><small>Max masters per Tally JSONEx request.</small></label>
+                <label>CA bundle path (optional)<input name="ca_bundle" placeholder="C:\path\to\ca.pem" /><small>Use a PEM bundle when Windows cannot verify the ERPNext HTTPS certificate.</small></label>
+              </div>
+              <label class="check"><input name="verify_tls" type="checkbox" /> Verify ERPNext HTTPS certificate</label>
+            </div>
+            <div class="form-section">
+              <h3>Bridge service</h3>
+              <p class="muted">Stop the local Control Centre process. Restart it from start-control-centre.cmd or the Windows scheduled task.</p>
+              <div class="form-actions"><button type="button" class="button danger" id="stop-bridge">Stop bridge</button></div>
             </div>
 			<div class="form-actions"><button type="button" class="button danger" id="reset-checkpoints">Reset inbound checkpoint</button><button type="button" class="button secondary" id="settings-test">Save and test</button><button type="submit" class="button primary">Save settings</button></div>
           </form>

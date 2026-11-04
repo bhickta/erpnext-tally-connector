@@ -439,6 +439,7 @@ def _ledger_message(
 	credit_limit,
 	posting_date=None,
 	tally_name=None,
+	parent=None,
 ):
 	name = (
 		tally_name
@@ -468,7 +469,7 @@ def _ledger_message(
 		)
 	)
 	fields = {
-		"parent": PARTY_PARENT[doctype],
+		"parent": parent or PARTY_PARENT[doctype],
 		"isbillwiseon": True,
 		"iscostcentreson": False,
 		"affectsstock": False,
@@ -698,10 +699,16 @@ def build_master_sync_payload(
 	posting_date=None,
 	limit=None,
 	duplicate_names="skip",
+	customer_parent="Sundry Debtors",
+	supplier_parent="Sundry Creditors",
 ):
 	"""Return dependency-ordered Tally JSONEx batches for the selected masters."""
 	if not frappe.db.exists("Company", company):
 		frappe.throw(_("Company {0} does not exist").format(frappe.bold(company)))
+	customer_parent = str(customer_parent or "").strip()
+	supplier_parent = str(supplier_parent or "").strip()
+	if not customer_parent or not supplier_parent:
+		frappe.throw(_("Customer and supplier parent groups are required"))
 	posting_date = str(posting_date or date.today().isoformat())
 	try:
 		date.fromisoformat(posting_date)
@@ -802,6 +809,7 @@ def build_master_sync_payload(
 					credit_limits.get(party["name"], 0),
 					posting_date=posting_date,
 					tally_name=party_names[party["name"]],
+					parent=customer_parent if doctype == "Customer" else supplier_parent,
 				)
 			)
 		batches.append(
@@ -875,6 +883,8 @@ def get_master_sync_payload(
 	posting_date=None,
 	limit=None,
 	duplicate_names="skip",
+	customer_parent="Sundry Debtors",
+	supplier_parent="Sundry Creditors",
 ):
 	frappe.only_for(("Accounts Manager", "System Manager", "Tally Sync User"))
 	return build_master_sync_payload(
@@ -885,4 +895,6 @@ def get_master_sync_payload(
 		posting_date=posting_date,
 		limit=cint(limit) if limit not in (None, "") else None,
 		duplicate_names=duplicate_names,
+		customer_parent=customer_parent,
+		supplier_parent=supplier_parent,
 	)

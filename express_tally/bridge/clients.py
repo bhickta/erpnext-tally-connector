@@ -1,5 +1,6 @@
 import http.client
 import json
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,9 +14,25 @@ class BridgeRequestError(RuntimeError):
 
 
 class FrappeClient:
-	def __init__(self, base_url, api_key, api_secret, timeout=30):
+	def __init__(
+		self,
+		base_url,
+		api_key,
+		api_secret,
+		timeout=30,
+		ca_bundle=None,
+		verify_tls=True,
+	):
 		self.base_url = base_url.rstrip("/")
 		self.timeout = timeout
+		self.ssl_context = None
+		if self.base_url.lower().startswith("https://"):
+			if not verify_tls:
+				self.ssl_context = ssl._create_unverified_context()
+			elif ca_bundle:
+				self.ssl_context = ssl.create_default_context(cafile=ca_bundle)
+			else:
+				self.ssl_context = ssl.create_default_context()
 		self.headers = {
 			"Authorization": f"token {api_key}:{api_secret}",
 			"Accept": "application/json",
@@ -41,12 +58,27 @@ class FrappeClient:
 			headers["Content-Type"] = "application/json"
 		request = urllib.request.Request(url, data=body, headers=headers, method=method.upper())
 		try:
-			with urllib.request.urlopen(request, timeout=self.timeout) as response:
+			with urllib.request.urlopen(
+				request, timeout=self.timeout, context=self.ssl_context
+			) as response:
 				payload = json.loads(response.read().decode("utf-8"))
 		except urllib.error.HTTPError as exc:
 			detail = exc.read().decode("utf-8", errors="replace")
 			raise BridgeRequestError(f"Frappe returned HTTP {exc.code}: {detail[:1000]}") from exc
+		except ssl.SSLCertVerificationError as exc:
+			raise BridgeRequestError(
+				"Cannot verify the Frappe TLS certificate. Set a CA bundle in Settings "
+				"or install the issuing CA on Windows. "
+				f"Details: {exc}"
+			) from exc
 		except (urllib.error.URLError, http.client.HTTPException, OSError, TimeoutError) as exc:
+			reason = getattr(exc, "reason", exc)
+			if isinstance(reason, ssl.SSLCertVerificationError):
+				raise BridgeRequestError(
+					"Cannot verify the Frappe TLS certificate. Set a CA bundle in Settings "
+					"or install the issuing CA on Windows. "
+					f"Details: {reason}"
+				) from exc
 			raise BridgeRequestError(f"Cannot reach Frappe: {exc}") from exc
 		return payload.get("message", payload)
 

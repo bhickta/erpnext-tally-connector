@@ -22,9 +22,14 @@ class BridgeConfig:
 	tally_url: str = "http://127.0.0.1:9000"
 	poll_interval_seconds: int = 60
 	batch_size: int = 20
+	master_batch_size: int = 250
 	listen_host: str = "127.0.0.1"
 	listen_port: int = 8765
 	request_timeout_seconds: int = 30
+	customer_parent: str = "Sundry Debtors"
+	supplier_parent: str = "Sundry Creditors"
+	ca_bundle: str = ""
+	verify_tls: bool = True
 	from_date: str | None = None
 	to_date: str | None = None
 	voucher_date_override: str | None = None
@@ -112,6 +117,16 @@ class BridgeConfig:
 			raise ValueError("listen_port must be between 1 and 65535")
 		if not 1 <= int(self.request_timeout_seconds) <= 300:
 			raise ValueError("request_timeout_seconds must be between 1 and 300")
+		if not 1 <= int(self.master_batch_size) <= 1000:
+			raise ValueError("master_batch_size must be between 1 and 1000")
+		for name in ("customer_parent", "supplier_parent"):
+			value = getattr(self, name)
+			if not isinstance(value, str) or not value.strip() or len(value) > 140:
+				raise ValueError(f"{name} must be a nonempty Tally group name")
+		if self.ca_bundle and not isinstance(self.ca_bundle, str):
+			raise ValueError("ca_bundle must be a PEM file path")
+		if not isinstance(self.verify_tls, bool):
+			raise ValueError("verify_tls must be true or false")
 		if self.voucher_date_override:
 			try:
 				date.fromisoformat(self.voucher_date_override)

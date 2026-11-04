@@ -754,3 +754,30 @@ class TestConfigStore(TestCase):
 			store.update({"api_secret": SECRET_MASK, "enabled_flows": ["test.outbound"]})
 			self.assertEqual(store.load().api_secret, "secret")
 			self.assertEqual(store.load().selected_flows, ("test.outbound",))
+
+	def test_master_sync_settings_are_configurable_and_validated(self):
+		with tempfile.TemporaryDirectory() as directory:
+			store = ConfigStore(Path(directory) / "tally-bridge.json")
+			stored = store.update(
+				{
+					"frappe_url": "https://erp.example.com",
+					"api_key": "key",
+					"api_secret": "secret",
+					"erpnext_company": "ERP Company",
+					"target_id": "target-1",
+					"tally_company": "Tally Company",
+					"customer_parent": "Trade Debtors",
+					"supplier_parent": "Trade Creditors",
+					"master_batch_size": 500,
+					"ca_bundle": "C:/certs/ca.pem",
+					"verify_tls": False,
+				}
+			)
+
+			self.assertEqual(stored.customer_parent, "Trade Debtors")
+			self.assertEqual(stored.supplier_parent, "Trade Creditors")
+			self.assertEqual(stored.master_batch_size, 500)
+			self.assertEqual(stored.ca_bundle, "C:/certs/ca.pem")
+			self.assertFalse(stored.verify_tls)
+			with self.assertRaises(ValueError):
+				store.update({"master_batch_size": 0})

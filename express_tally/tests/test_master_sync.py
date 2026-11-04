@@ -153,6 +153,19 @@ class TestPartyMapping(TestCase):
 		self.assertEqual(message["ledmailingdetails"][0]["applicablefrom"], "20260401")
 		self.assertIn("ERPNext:Customer:CUST-0001", message["language name"][0]["name"])
 
+	def test_customer_parent_is_configurable(self):
+		message = export._ledger_message(
+			{"name": "C1", "customer_name": "Acme", "country": "India", "disabled": 0},
+			"Customer",
+			"Test Company",
+			None,
+			None,
+			0,
+			parent="Custom Debtors",
+		)
+
+		self.assertEqual(message["parent"], "Custom Debtors")
+
 	def test_warehouse_godown_maps_parent_and_alias(self):
 		message = export._godown_message(
 			{
@@ -298,6 +311,27 @@ class TestMasterSyncService(TestCase):
 			self.assertEqual(report_id, "All Masters")
 			self.assertEqual(payload["static_variables"][1]["value"], "Tally Company")
 
+	def test_sync_can_be_cancelled_before_the_first_batch(self):
+		batches = [
+			{
+				"key": "items",
+				"label": "Items",
+				"tallymessage": [{"name": "ITEM-1"}],
+			}
+		]
+		frappe = FakeFrappe(batches)
+		tally = FakeTally()
+		service = MasterSyncService(self.config(), frappe, tally)
+		cancel_event = threading.Event()
+		cancel_event.set()
+
+		result = service.sync(["Item"], cancel_event=cancel_event)
+
+		self.assertTrue(result["cancelled"])
+		self.assertFalse(result["ok"])
+		self.assertEqual(result["results"][0]["status"], "Cancelled")
+		self.assertEqual(len(tally.requests), 0)
+
 	def test_sync_stops_after_a_failed_chunk(self):
 		batches = [
 			{
@@ -343,6 +377,7 @@ class FakeMasterService:
 		include_opening_balances=False,
 		limit=None,
 		duplicate_names="skip",
+		cancel_event=None,
 	):
 		return {
 			"ok": True,
@@ -401,6 +436,16 @@ class TestMasterSyncHTTP(TestCase):
 					result = json.loads(response.read())
 				self.assertTrue(result["ok"])
 				self.assertEqual(result["results"][0]["created"], 5)
+
+				cancel_request = urllib.request.Request(
+					f"{base_url}/api/v1/masters/cancel",
+					data=b"{}",
+					headers={"Content-Type": "application/json"},
+					method="POST",
+				)
+				with urllib.request.urlopen(cancel_request, timeout=2) as response:
+					cancel = json.loads(response.read())
+				self.assertFalse(cancel["cancelled"])
 			finally:
 				controller.shutdown()
 				server.shutdown()

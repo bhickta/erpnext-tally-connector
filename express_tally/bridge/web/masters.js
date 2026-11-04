@@ -99,9 +99,11 @@ async function syncMasters() {
     return;
   }
   const button = $("#sync-masters");
+  const cancelButton = $("#cancel-masters");
   const previousLabel = button.textContent;
   button.disabled = true;
   button.textContent = "Syncing…";
+  cancelButton?.classList.remove("hidden");
   showError();
   try {
     const result = await dependencies.api("/api/v1/masters/sync", {
@@ -131,6 +133,19 @@ async function syncMasters() {
   } finally {
     button.disabled = false;
     button.textContent = previousLabel;
+    cancelButton?.classList.add("hidden");
+  }
+}
+
+async function cancelSync() {
+  try {
+    const result = await dependencies.api("/api/v1/masters/cancel", {
+      method: "POST",
+      body: "{}",
+    });
+    dependencies.toast(result.message || (result.cancelled ? "Cancelling…" : "No sync is running."), !result.cancelled);
+  } catch (error) {
+    dependencies.toast(error.message, true);
   }
 }
 
@@ -138,5 +153,6 @@ export function initializeMasters(values) {
   dependencies = values;
   $("#refresh-masters")?.addEventListener("click", () => loadMasters(true));
   $("#sync-masters")?.addEventListener("click", syncMasters);
+  $("#cancel-masters")?.addEventListener("click", cancelSync);
   loadMasters();
 }

@@ -82,11 +82,14 @@ class MasterSyncService:
 		include_opening_balances=False,
 		limit=None,
 		duplicate_names="skip",
+		cancel_event=None,
 	):
 		selected = normalize_masters(masters)
 		duplicate_names = str(duplicate_names or "skip").strip().lower()
 		if duplicate_names not in {"skip", "suffix"}:
 			raise ValueError("duplicate_names must be skip or suffix")
+		batch_size = int(getattr(self.config, "master_batch_size", MASTER_BATCH_SIZE) or MASTER_BATCH_SIZE)
+		batch_size = min(max(batch_size, 1), 1000)
 		params = {
 			"company": self.config.erpnext_company,
 			"masters": json.dumps(selected),
@@ -94,6 +97,8 @@ class MasterSyncService:
 			"include_opening_balances": int(bool(include_opening_balances)),
 			"posting_date": getattr(self.config, "from_date", None) or date.today().isoformat(),
 			"duplicate_names": duplicate_names,
+			"customer_parent": getattr(self.config, "customer_parent", "Sundry Debtors"),
+			"supplier_parent": getattr(self.config, "supplier_parent", "Sundry Creditors"),
 		}
 		if limit:
 			params["limit"] = int(limit)
@@ -102,12 +107,34 @@ class MasterSyncService:
 		if not batches:
 			raise BridgeRequestError("ERPNext returned no master batches")
 
+		def cancelled():
+			return bool(cancel_event and cancel_event.is_set())
+
 		results = []
 		failed = False
+		was_cancelled = False
 		for batch in batches:
 			key = str(batch.get("key") or "")
 			label = str(batch.get("label") or key)
 			messages = batch.get("tallymessage") or []
+			if cancelled():
+				was_cancelled = True
+				failed = True
+				results.append(
+					{
+						"batch": key,
+						"label": label,
+						"status": "Cancelled",
+						"message": "Cancelled by operator",
+						"created": 0,
+						"altered": 0,
+						"ignored": 0,
+						"errors": 0,
+						"requests": 0,
+						"total": len(messages),
+					}
+				)
+				continue
 			if failed:
 				results.append(
 					{
@@ -144,8 +171,13 @@ class MasterSyncService:
 			created = altered = ignored = errors = requests = 0
 			status = "Success"
 			message = ""
-			for offset in range(0, len(messages), MASTER_BATCH_SIZE):
-				chunk = messages[offset : offset + MASTER_BATCH_SIZE]
+			for offset in range(0, len(messages), batch_size):
+				if cancelled():
+					was_cancelled = True
+					status = "Cancelled"
+					message = "Cancelled by operator"
+					break
+				chunk = messages[offset : offset + batch_size]
 				request = {
 					"static_variables": [
 						{"name": "svMstImportFormat", "value": "jsonex"},
@@ -189,7 +221,7 @@ class MasterSyncService:
 					"total": len(messages),
 				}
 			)
-			if status == "Failed":
+			if status in {"Failed", "Cancelled"}:
 				failed = True
 
 		try:
@@ -205,6 +237,7 @@ class MasterSyncService:
 			"include_disabled": bool(include_disabled),
 			"include_opening_balances": bool(include_opening_balances),
 			"duplicate_names": duplicate_names,
+			"cancelled": was_cancelled,
 			"skipped": payload.get("skipped") or [],
 			"results": results,
 			"summary": summary,

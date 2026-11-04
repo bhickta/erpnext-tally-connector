@@ -22,6 +22,7 @@ def build(executable, output_file=OUTPUT_FILE):
 		for filename in (
 			"README.md",
 			"start-control-centre.cmd",
+			"stop-control-centre.cmd",
 			"tally-bridge.example.json",
 		):
 			archive.write(PLUGIN_DIR / filename, filename)

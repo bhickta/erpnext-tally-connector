@@ -47,6 +47,15 @@ def build(runtime, output):
 			"start-control-centre.cmd",
 			'@echo off\r\ncd /d "%~dp0"\r\nstart "" "%~dp0pythonw.exe" -m express_tally.bridge %*\r\n',
 		)
+		archive.writestr(
+			"stop-control-centre.cmd",
+			'@echo off\r\nsetlocal\r\npowershell -NoProfile -ExecutionPolicy Bypass -Command ^\r\n'
+			'  "$procs = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq \'ERPNextTallyControlCentre.exe\' -or ($_.Name -eq \'pythonw.exe\' -and $_.CommandLine -match \'express_tally.bridge\') });" ^\r\n'
+			'  "if (-not $procs) { Write-Output \'Bridge is not running.\'; exit /b 0 };" ^\r\n'
+			'  "$procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force };" ^\r\n'
+			'  "Write-Output \'Bridge stopped.\'"\r\n'
+			'if /i not "%~1"=="/quiet" pause\r\n',
+		)
 		archive.writestr("source-manifest.json", json.dumps(manifest, indent=2))
 	checksum = hashlib.sha256(output.read_bytes()).hexdigest()
 	output.with_suffix(output.suffix + ".sha256").write_text(f"{checksum}  {output.name}\n")
