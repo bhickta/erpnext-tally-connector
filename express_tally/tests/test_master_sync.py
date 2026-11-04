@@ -303,9 +303,8 @@ class TestItemMapping(TestCase):
 			],
 		}
 
-		with patch.object(
-			export,
-			"_fetch_child_rows",
+		with patch(
+			"express_tally.integrations.master_sync.items._fetch_child_rows",
 			side_effect=lambda doctype, names, fields: rows.get(doctype, []),
 		):
 			messages = export._item_messages(
