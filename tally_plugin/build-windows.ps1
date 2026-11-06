@@ -22,6 +22,7 @@ python -m PyInstaller `
     --name ERPNextTallyControlCentre `
     --paths $RepoRoot `
     --add-data "$(Join-Path $RepoRoot 'express_tally\bridge\web');express_tally\bridge\web" `
+    --add-data "$(Join-Path $RepoRoot 'express_tally\bridge\ca-bundle.pem');express_tally\bridge" `
     --distpath $ExeDir `
     --workpath $WorkDir `
     --specpath $SpecDir `

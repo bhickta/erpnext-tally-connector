@@ -4,9 +4,13 @@ import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 from .json_gateway import parse_import_response as parse_json_import_response
 from .xml_gateway import parse_current_company, parse_logical_result
+
+
+DEFAULT_CA_BUNDLE = Path(__file__).resolve().with_name("ca-bundle.pem")
 
 
 class BridgeRequestError(RuntimeError):
@@ -29,10 +33,15 @@ class FrappeClient:
 		if self.base_url.lower().startswith("https://"):
 			if not verify_tls:
 				self.ssl_context = ssl._create_unverified_context()
-			elif ca_bundle:
-				self.ssl_context = ssl.create_default_context(cafile=ca_bundle)
 			else:
 				self.ssl_context = ssl.create_default_context()
+				bundle = ca_bundle or (
+					str(DEFAULT_CA_BUNDLE) if DEFAULT_CA_BUNDLE.is_file() else None
+				)
+				if bundle:
+					# Add the bundled root set to the Windows trust store.
+					# A configured ca_bundle overrides the bundled file.
+					self.ssl_context.load_verify_locations(cafile=bundle)
 		self.headers = {
 			"Authorization": f"token {api_key}:{api_secret}",
 			"Accept": "application/json",
@@ -67,16 +76,18 @@ class FrappeClient:
 			raise BridgeRequestError(f"Frappe returned HTTP {exc.code}: {detail[:1000]}") from exc
 		except ssl.SSLCertVerificationError as exc:
 			raise BridgeRequestError(
-				"Cannot verify the Frappe TLS certificate. Set a CA bundle in Settings "
-				"or install the issuing CA on Windows. "
+				"Cannot verify the Frappe TLS certificate. A bundled CA is used "
+				"automatically; for a private CA, set a CA bundle in Settings or "
+				"install the issuing CA on Windows. "
 				f"Details: {exc}"
 			) from exc
 		except (urllib.error.URLError, http.client.HTTPException, OSError, TimeoutError) as exc:
 			reason = getattr(exc, "reason", exc)
 			if isinstance(reason, ssl.SSLCertVerificationError):
 				raise BridgeRequestError(
-					"Cannot verify the Frappe TLS certificate. Set a CA bundle in Settings "
-					"or install the issuing CA on Windows. "
+					"Cannot verify the Frappe TLS certificate. A bundled CA is used "
+					"automatically; for a private CA, set a CA bundle in Settings or "
+					"install the issuing CA on Windows. "
 					f"Details: {reason}"
 				) from exc
 			raise BridgeRequestError(f"Cannot reach Frappe: {exc}") from exc
