@@ -5,6 +5,8 @@ import logging
 from datetime import date
 
 from .clients import BridgeRequestError
+from .collection_gateway import build_collection_export, parse_collection_export
+from .normalization import master_name
 
 LOGGER = logging.getLogger("erpnext_tally_bridge.master_sync")
 
@@ -59,6 +61,19 @@ MASTER_BATCH_SIZE = 250
 DUPLICATE_POLICIES = frozenset({"skip", "suffix"})
 DEFAULT_CUSTOMER_PARENT = "Sundry Debtors"
 DEFAULT_SUPPLIER_PARENT = "Sundry Creditors"
+
+# Batch key -> (Tally object type, record tags). Existing masters are altered
+# instead of created, preventing Tally's duplicate-master modal error.
+EXISTING_MASTER_COLLECTIONS = {
+	"units": ("Unit", ("UNIT",)),
+	"item_groups": ("Stock Group", ("STOCKGROUP", "STOCKGROUPS")),
+	"account_groups": ("Group", ("GROUP",)),
+	"account_ledgers": ("Ledger", ("LEDGER",)),
+	"warehouses": ("Godown", ("GODOWN",)),
+	"customers": ("Ledger", ("LEDGER",)),
+	"suppliers": ("Ledger", ("LEDGER",)),
+	"items": ("Stock Item", ("STOCKITEM",)),
+}
 
 
 def normalize_masters(masters):
@@ -131,6 +146,7 @@ class MasterSyncService:
 		self.config = config
 		self.frappe = frappe_client
 		self.tally = tally_client
+		self._existing_names_by_type = {}
 
 	def metadata(self):
 		return {"masters": [dict(master) for master in MASTER_TYPES]}
@@ -217,6 +233,35 @@ class MasterSyncService:
 			params["limit"] = int(limit)
 		return self.frappe.request("GET", PAYLOAD_PATH, params)
 
+	def _existing_names(self, batch_key):
+		collection = EXISTING_MASTER_COLLECTIONS.get(batch_key)
+		if not collection:
+			return set()
+		object_type, tags = collection
+		if object_type in self._existing_names_by_type:
+			return self._existing_names_by_type[object_type]
+		collection_name = f"ETExisting{object_type.replace(' ', '')}"
+		request = build_collection_export(
+			self.config.tally_company,
+			collection_name,
+			object_type,
+			("Name",),
+		)
+		response = self.tally.export_collection(request)
+		records = parse_collection_export(response, tags)
+		names = {master_name(row) for row in records if master_name(row)}
+		self._existing_names_by_type[object_type] = names
+		LOGGER.info("Existing Tally %s masters: %s", object_type, len(names))
+		return names
+
+	@staticmethod
+	def _apply_actions(messages, existing_names):
+		existing_folded = {name.casefold() for name in existing_names}
+		for message in messages:
+			metadata = message.setdefault("metadata", {})
+			name = message.get("name") or metadata.get("name") or ""
+			metadata["action"] = "alter" if str(name).casefold() in existing_folded else "create"
+
 	def _run_batches(self, batches, batch_size, cancel_event):
 		results = []
 		failed = False
@@ -239,7 +284,20 @@ class MasterSyncService:
 					total=len(messages),
 				)
 			else:
-				result = self._run_batch(parts, messages, batch_size, cancel_event)
+				try:
+					existing_names = self._existing_names(parts["key"])
+				except Exception as exc:
+					result = batch_result(
+						parts,
+						"Failed",
+						f"{parts['label']} lookup failed: {exc}"[:4000],
+						errors=len(messages),
+						total=len(messages),
+					)
+					LOGGER.warning("Master lookup %s failed: %s", parts["key"], exc)
+				else:
+					self._apply_actions(messages, existing_names)
+					result = self._run_batch(parts, messages, batch_size, cancel_event)
 			if result["status"] == "Cancelled":
 				was_cancelled = True
 			if result["status"] in {"Failed", "Cancelled"}:

@@ -348,9 +348,21 @@ class FakeFrappe:
 
 
 class FakeTally:
-	def __init__(self, fail_on=None):
+	def __init__(self, fail_on=None, existing_units=None):
 		self.requests = []
+		self.exports = []
 		self.fail_on = fail_on
+		self.existing_units = existing_units or set()
+
+	def export_collection(self, request):
+		self.exports.append(request)
+		if "<TYPE>Unit</TYPE>" in request:
+			rows = "".join(
+				f'<UNIT NAME="{name}"><NAME>{name}</NAME></UNIT>'
+				for name in sorted(self.existing_units)
+			)
+			return f"<ENVELOPE><DATA><COLLECTION>{rows}</COLLECTION></DATA></ENVELOPE>"
+		return "<ENVELOPE><DATA><COLLECTION></COLLECTION></DATA></ENVELOPE>"
 
 	def import_json(self, payload, report_id, require_change=False, allow_ignored=False):
 		self.requests.append((payload, report_id))
@@ -388,6 +400,30 @@ class TestMasterSyncService(TestCase):
 		for payload, report_id in tally.requests:
 			self.assertEqual(report_id, "All Masters")
 			self.assertEqual(payload["static_variables"][1]["value"], "Tally Company")
+
+	def test_existing_tally_unit_is_altered_instead_of_created(self):
+		batches = [
+			{
+				"key": "units",
+				"label": "Units",
+				"tallymessage": [
+					{
+						"metadata": {"type": "Unit", "action": "create", "name": "14 Pkg"},
+						"name": "14 Pkg",
+					}
+				],
+			}
+		]
+		frappe = FakeFrappe(batches)
+		tally = FakeTally(existing_units={"14 Pkg"})
+		service = MasterSyncService(self.config(), frappe, tally)
+
+		result = service.sync(["Item"])
+
+		self.assertTrue(result["ok"])
+		payload, _report_id = tally.requests[0]
+		self.assertEqual(payload["tallymessage"][0]["metadata"]["action"], "alter")
+		self.assertEqual(len(tally.exports), 1)
 
 	def test_sync_can_be_cancelled_before_the_first_batch(self):
 		batches = [
