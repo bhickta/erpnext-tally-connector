@@ -11,6 +11,7 @@ recursive-include express_tally *.ico
 recursive-include express_tally *.js
 recursive-include express_tally *.json
 recursive-include express_tally *.md
+recursive-include express_tally *.pem
 recursive-include express_tally *.png
 recursive-include express_tally *.py
 recursive-include express_tally *.svg

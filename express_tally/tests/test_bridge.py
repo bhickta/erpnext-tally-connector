@@ -629,6 +629,13 @@ class TestFrappeFlowClient(TestCase):
 		self.client = FrappeClient("https://erp.example.com", "key", "secret")
 		self.client.request = Mock(return_value={})
 
+	def test_client_uses_the_bundled_ca_for_https(self):
+		from express_tally.bridge.clients import DEFAULT_CA_BUNDLE
+
+		self.assertTrue(DEFAULT_CA_BUNDLE.is_file())
+		self.assertIsNotNone(self.client.ssl_context)
+		self.assertGreater(self.client.ssl_context.cert_store_stats()["x509_ca"], 0)
+
 	def test_client_uses_the_framework_api(self):
 		config = replace(
 			self.config,

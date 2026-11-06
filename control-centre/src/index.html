@@ -233,7 +233,7 @@
                 <label>Customer ledger group<input name="customer_parent" required /></label>
                 <label>Supplier ledger group<input name="supplier_parent" required /></label>
                 <label>Master batch size<input name="master_batch_size" type="number" min="1" max="1000" required /><small>Max masters per Tally JSONEx request.</small></label>
-                <label>CA bundle path (optional)<input name="ca_bundle" placeholder="C:\path\to\ca.pem" /><small>Use a PEM bundle when Windows cannot verify the ERPNext HTTPS certificate.</small></label>
+                <label>CA bundle path (optional)<input name="ca_bundle" placeholder="C:\path\to\ca.pem" /><small>The bridge includes a CA bundle by default. Set this only for a private CA.</small></label>
               </div>
               <label class="check"><input name="verify_tls" type="checkbox" /> Verify ERPNext HTTPS certificate</label>
             </div>

@@ -25,6 +25,7 @@ def build(runtime, output):
 			repo / "express_tally" / "tests" / "__init__.py",
 		]
 		files.extend((repo / "express_tally" / "bridge").rglob("*.py"))
+		files.append(repo / "express_tally" / "bridge" / "ca-bundle.pem")
 		files.extend(
 			path for path in (repo / "express_tally" / "bridge" / "web").rglob("*") if path.is_file()
 		)
