@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .json_gateway import parse_import_response as parse_json_import_response
 from .xml_gateway import parse_current_company, parse_logical_result
+from .tally_transport import send
 
 
 DEFAULT_CA_BUNDLE = Path(__file__).resolve().with_name("ca-bundle.pem")
@@ -196,14 +197,7 @@ class TallyClient:
 			headers={"Content-Type": "text/xml; charset=UTF-8", "User-Agent": "ERPNext-Tally-Bridge/1.0"},
 			method="POST",
 		)
-		try:
-			with urllib.request.urlopen(request, timeout=self.timeout) as response:
-				return response.read().decode("utf-8", errors="replace")
-		except urllib.error.HTTPError as exc:
-			detail = exc.read().decode("utf-8", errors="replace")
-			raise BridgeRequestError(f"Tally returned HTTP {exc.code}: {detail[:1000]}") from exc
-		except (urllib.error.URLError, http.client.HTTPException, OSError, TimeoutError) as exc:
-			raise BridgeRequestError(f"Cannot reach Tally at {self.url}: {exc}") from exc
+		return send(request, self.timeout, BridgeRequestError)
 
 	def post_json(self, payload, report_id):
 		request = urllib.request.Request(
@@ -220,22 +214,12 @@ class TallyClient:
 			},
 			method="POST",
 		)
+		raw_response = send(request, self.timeout, BridgeRequestError)
+		# Tally may emit its reserved-name marker without JSON escaping it.
 		try:
-			with urllib.request.urlopen(request, timeout=self.timeout) as response:
-				raw_response = response.read().decode("utf-8", errors="replace")
-				# Tally 7.1 may emit its reserved-name marker (U+0004) without
-				# JSON escaping it. strict=False accepts that otherwise valid response.
-				try:
-					return json.loads(raw_response, strict=False)
-				except json.JSONDecodeError as exc:
-					raise BridgeRequestError(
-						f"Tally returned invalid JSON: {raw_response[:1000]}"
-					) from exc
-		except urllib.error.HTTPError as exc:
-			detail = exc.read().decode("utf-8", errors="replace")
-			raise BridgeRequestError(f"Tally returned HTTP {exc.code}: {detail[:1000]}") from exc
-		except (urllib.error.URLError, http.client.HTTPException, OSError, TimeoutError) as exc:
-			raise BridgeRequestError(f"Cannot reach Tally at {self.url}: {exc}") from exc
+			return json.loads(raw_response, strict=False)
+		except json.JSONDecodeError as exc:
+			raise BridgeRequestError(f"Tally returned invalid JSON: {raw_response[:1000]}") from exc
 
 	def get_current_company(self, request_xml):
 		return parse_current_company(self.post_xml(request_xml))

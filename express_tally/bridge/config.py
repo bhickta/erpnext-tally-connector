@@ -22,7 +22,7 @@ class BridgeConfig:
 	tally_url: str = "http://127.0.0.1:9000"
 	poll_interval_seconds: int = 60
 	batch_size: int = 20
-	master_batch_size: int = 250
+	master_batch_size: int = 10
 	listen_host: str = "127.0.0.1"
 	listen_port: int = 8765
 	request_timeout_seconds: int = 30
