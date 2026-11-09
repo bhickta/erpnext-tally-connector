@@ -8,241 +8,779 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
     <div class="shell">
       <aside class="sidebar">
         <div class="brand">
           <div class="brand-mark">ET</div>
           <div><strong>Express Tally</strong><span>Control Centre</span></div>
         </div>
-        <nav>
-          <button class="nav-item active" data-page="overview">Overview</button>
-          <button class="nav-item" data-page="flows">Sync flows</button>
-          <button class="nav-item" data-page="masters">Masters sync</button>
-          <button class="nav-item" data-page="operations">Operations</button>
-          <button class="nav-item" data-page="history">History</button>
-          <button class="nav-item" data-page="settings">Settings</button>
+        <nav aria-label="Main navigation">
+          <button class="nav-item active" data-page="overview">
+            Dashboard
+          </button>
+          <button class="nav-item" data-page="flows">Transaction flows</button>
+          <button class="nav-item" data-page="masters">Master data</button>
+          <button class="nav-item" data-page="operations">
+            Flow workspace
+          </button>
+          <button class="nav-item" data-page="history">Run history</button>
+          <button class="nav-item" data-page="settings">
+            Connections & settings
+          </button>
         </nav>
         <div class="sidebar-foot">
           <span class="pulse-dot" id="service-dot"></span>
-          <span id="service-label">Starting service…</span>
+          <span
+            ><span id="service-label">Connecting to bridge…</span><br /><small
+              >Connector 0.4.0 · UI 1.2.0</small
+            ></span
+          >
         </div>
       </aside>
 
-      <main>
+      <main id="main-content">
         <header class="topbar">
           <div>
-            <p class="eyebrow">LOCAL CONNECTOR</p>
-            <h1 id="page-title">Overview</h1>
+            <p class="eyebrow">ERPNEXT + TALLYPRIME</p>
+            <h1 id="page-title" tabindex="-1">Dashboard</h1>
+            <p class="page-description" id="page-description">
+              Connect your companies, sync master data, then run transactions.
+            </p>
           </div>
-          <button class="button secondary" id="test-connections">Test connections</button>
+          <button class="button secondary" id="test-connections">
+            Test connections
+          </button>
         </header>
 
+        <div class="company-bar">
+          <span>ERPNext <strong id="context-erp">Not configured</strong></span
+          ><span aria-hidden="true">↔</span
+          ><span>Tally <strong id="context-tally">Not configured</strong></span
+          ><button class="link-button" data-go="settings">
+            Edit connections
+          </button>
+        </div>
+        <div id="service-alert" class="alert hidden" role="alert"></div>
+        <div
+          id="connection-feedback"
+          class="alert hidden"
+          role="status"
+          aria-live="polite"
+        ></div>
         <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
         <section class="page active" data-page-panel="overview">
-          <div class="alert hidden" id="configuration-alert"></div>
+          <div
+            class="alert hidden"
+            id="configuration-alert"
+            role="status"
+          ></div>
+          <article class="getting-started panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">YOUR NEXT STEP</p>
+                <h2 id="next-step-title">Set up your connections</h2>
+                <p class="muted" id="next-step-detail">
+                  Enter your ERPNext credentials and choose the company open in
+                  Tally.
+                </p>
+              </div>
+              <button
+                class="button primary"
+                id="next-step-action"
+                data-go="settings"
+              >
+                Set up connections
+              </button>
+            </div>
+            <ol class="setup-steps">
+              <li>
+                <button data-go="settings">
+                  <span class="step-number">1</span
+                  ><span
+                    ><strong>Connect companies</strong
+                    ><small>Save and test your connections</small></span
+                  >
+                </button>
+              </li>
+              <li>
+                <button data-go="masters">
+                  <span class="step-number">2</span
+                  ><span
+                    ><strong>Send master data</strong
+                    ><small
+                      >Items, customers, suppliers and accounts</small
+                    ></span
+                  >
+                </button>
+              </li>
+              <li>
+                <button data-go="flows">
+                  <span class="step-number">3</span
+                  ><span
+                    ><strong>Choose transactions</strong
+                    ><small>Enable flows, preview, then sync</small></span
+                  >
+                </button>
+              </li>
+            </ol>
+          </article>
 
           <div class="status-grid">
             <article class="status-card">
               <div class="status-icon erp">E</div>
-              <div><span>ERPNext</span><strong id="erp-status">Checking…</strong><small id="erp-detail">—</small></div>
+              <div>
+                <span>ERPNext</span><strong id="erp-status">Checking…</strong
+                ><small id="erp-detail">—</small>
+              </div>
             </article>
             <article class="status-card">
               <div class="status-icon tally">T</div>
-              <div><span>TallyPrime</span><strong id="tally-status">Checking…</strong><small id="tally-detail">—</small></div>
+              <div>
+                <span>TallyPrime</span
+                ><strong id="tally-status">Checking…</strong
+                ><small id="tally-detail">—</small>
+              </div>
             </article>
             <article class="status-card">
               <div class="status-icon sync">↻</div>
-              <div><span>Sync engine</span><strong id="sync-status">Idle</strong><small id="sync-detail">Ready</small></div>
+              <div>
+                <span>Sync engine</span><strong id="sync-status">Idle</strong
+                ><small id="sync-detail">Ready</small>
+              </div>
             </article>
           </div>
 
           <div class="layout-grid">
             <article class="panel hero-panel">
               <div class="panel-heading">
-                <div><p class="eyebrow">QUICK ACTIONS</p><h2>Synchronize now</h2></div>
-                <span class="running-badge hidden" id="running-badge">Running</span>
+                <div>
+                  <p class="eyebrow">TRANSACTIONS</p>
+                  <h2>Run enabled flows</h2>
+                </div>
+                <span class="running-badge hidden" id="running-badge"
+                  >Running</span
+                >
               </div>
-              <p class="muted">Run all enabled flows in the selected direction. Every result is acknowledged and recorded.</p>
+              <p class="muted">
+                Send or receive transactions using your saved flow selection.
+                Master data is synced separately.
+              </p>
+              <p class="field-note" id="sync-availability" aria-live="polite">
+                Choose transaction flows to enable these actions.
+              </p>
               <div class="action-grid">
-                <button class="sync-button outbound" data-direction="erpnext_to_tally"><span>ERPNext</span><b>→</b><span>Tally</span></button>
-                <button class="sync-button inbound" data-direction="tally_to_erpnext"><span>Tally</span><b>→</b><span>ERPNext</span></button>
-                <button class="sync-button both" data-direction="all"><span>Sync both directions</span><b>↔</b></button>
+                <button
+                  class="sync-button outbound"
+                  data-direction="erpnext_to_tally"
+                >
+                  <span>ERPNext</span><b>→</b><span>Tally</span>
+                </button>
+                <button
+                  class="sync-button inbound"
+                  data-direction="tally_to_erpnext"
+                >
+                  <span>Tally</span><b>→</b><span>ERPNext</span>
+                </button>
+                <button class="sync-button both" data-direction="all">
+                  <span>Run all enabled flows</span><b>↔</b>
+                </button>
               </div>
             </article>
 
             <article class="panel auto-panel">
-              <div class="panel-heading"><div><p class="eyebrow">SCHEDULE</p><h2>Automatic sync</h2></div><label class="switch"><input id="auto-sync" type="checkbox" /><span></span></label></div>
-              <p class="muted" id="auto-description">Automatic synchronization is off.</p>
-              <div class="next-run"><span>Next run</span><strong id="next-auto-sync">Not scheduled</strong></div>
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">SCHEDULE</p>
+                  <h2>Automatic sync</h2>
+                </div>
+                <label class="switch"
+                  ><input
+                    id="auto-sync"
+                    type="checkbox"
+                    aria-label="Enable automatic transaction sync" /><span></span
+                ></label>
+              </div>
+              <p class="muted" id="auto-description">
+                Automatic synchronization is off.
+              </p>
+              <div class="next-run">
+                <span>Next run</span
+                ><strong id="next-auto-sync">Not scheduled</strong>
+              </div>
               <div class="direction-tags" id="auto-directions"></div>
             </article>
           </div>
 
           <article class="panel recent-panel">
-            <div class="panel-heading"><div><p class="eyebrow">LATEST ACTIVITY</p><h2>Recent runs</h2></div><button class="link-button" data-go="history">View all</button></div>
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">LATEST ACTIVITY</p>
+                <h2>Recent runs</h2>
+              </div>
+              <button class="link-button" data-go="history">View all</button>
+            </div>
             <div id="recent-history"></div>
           </article>
         </section>
 
         <section class="page" data-page-panel="flows">
           <article class="panel">
-            <div class="panel-heading"><div><p class="eyebrow">REGISTERED IN ERPNEXT</p><h2>Synchronization flows</h2></div><button class="button secondary" id="refresh-flows">Refresh</button></div>
-            <p class="muted">Enable the flows this computer is responsible for. A matching local agent profile is required for each direction.</p>
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">REGISTERED IN ERPNEXT</p>
+                <h2>Choose what to sync</h2>
+              </div>
+              <button class="button secondary" id="refresh-flows">
+                Refresh
+              </button>
+            </div>
+            <p class="muted">
+              Enable the transaction types you need, then save your selection.
+              Open a flow’s workspace to configure it and preview pending
+              records before running.
+            </p>
             <div class="list-toolbar">
-              <label class="search-field"><span class="visually-hidden">Search flows</span><input id="flow-search" type="search" placeholder="Search by name, key, or direction" autocomplete="off" /></label>
+              <label class="search-field"
+                ><span class="visually-hidden">Search flows</span
+                ><input
+                  id="flow-search"
+                  type="search"
+                  placeholder="Search by name, key, or direction"
+                  autocomplete="off"
+              /></label>
               <div class="list-toolbar-actions">
-                <span class="tag" id="flow-count" aria-live="polite">0 flows</span>
-                <button class="button secondary small" id="select-flows" type="button">Select available</button>
-                <button class="button secondary small" id="clear-flows" type="button">Clear</button>
+                <span class="tag" id="flow-count" aria-live="polite"
+                  >0 flows</span
+                >
+                <button
+                  class="button secondary small"
+                  id="select-flows"
+                  type="button"
+                >
+                  Select compatible
+                </button>
+                <button
+                  class="button secondary small"
+                  id="clear-flows"
+                  type="button"
+                >
+                  Clear
+                </button>
               </div>
             </div>
-            <div id="flows-list" class="flows-list"><div class="empty">Connect ERPNext to discover flows.</div></div>
-            <div class="form-actions"><button class="button primary" id="save-flows">Save enabled flows</button></div>
+            <div id="flows-list" class="flows-list">
+              <div class="empty">Connect ERPNext to discover flows.</div>
+            </div>
+            <div id="flows-error" class="alert hidden" role="alert"></div>
+            <div class="form-actions sticky-actions">
+              <span id="flows-save-status" class="field-note" aria-live="polite"
+                >Selection saved</span
+              ><button class="button primary" id="save-flows">
+                Save enabled flows
+              </button>
+            </div>
           </article>
         </section>
 
         <section class="page" data-page-panel="masters">
           <article class="panel">
             <div class="panel-heading">
-              <div><p class="eyebrow">ERPNEXT → TALLY</p><h2>Masters sync</h2></div>
-              <button class="button secondary" id="refresh-masters">Refresh counts</button>
+              <div>
+                <p class="eyebrow">ERPNEXT → TALLY</p>
+                <h2>Send master data to Tally</h2>
+              </div>
+              <button class="button secondary" id="refresh-masters">
+                Refresh counts
+              </button>
             </div>
-            <p class="muted">Push Accounting Groups, Ledgers, Item, Warehouse, Customer and Supplier masters to TallyPrime. Each Tally master stores the ERPNext identity in its alias field so records can be matched later. Ledger sync includes the account group hierarchy; Item sync also pushes Item Groups and Units.</p>
-            <div id="masters-error" class="alert hidden"></div>
+            <p class="muted">
+              Choose the records to create or update in Tally. Items include
+              their groups and units; ledgers include account groups. This is a
+              manual ERPNext → Tally action, separate from transaction flows.
+            </p>
+            <div id="masters-error" class="alert hidden" role="alert"></div>
+            <div
+              id="masters-progress"
+              class="notice hidden"
+              role="status"
+              aria-live="polite"
+            ></div>
             <div class="list-toolbar compact">
-              <span class="tag" id="masters-selected-count" aria-live="polite">0 selected</span>
+              <span class="tag" id="masters-selected-count" aria-live="polite"
+                >0 selected</span
+              >
               <div class="list-toolbar-actions">
-                <button class="button secondary small" id="select-masters" type="button">Select all</button>
-                <button class="button secondary small" id="clear-masters" type="button">Clear</button>
+                <button
+                  class="button secondary small"
+                  id="select-masters"
+                  type="button"
+                >
+                  Select all
+                </button>
+                <button
+                  class="button secondary small"
+                  id="clear-masters"
+                  type="button"
+                >
+                  Clear
+                </button>
               </div>
             </div>
-            <div id="masters-list" class="masters-list"><div class="empty">Connect ERPNext to load master counts.</div></div>
-            <div class="masters-actions">
-              <label class="check"><input id="masters-include-disabled" type="checkbox" /> Include disabled records</label>
-              <label class="check"><input id="masters-include-openings" type="checkbox" /> Include item opening stock</label>
-              <label class="masters-limit">Limit per group<input id="masters-limit" type="number" min="1" placeholder="All" /></label>
-              <label class="masters-limit">Duplicate names<select id="masters-duplicate-names"><option value="skip">Skip duplicates</option><option value="suffix">Add ERPNext ID</option></select></label>
-              <button class="button primary" id="sync-masters">Sync selected to Tally</button>
-              <button class="button danger hidden" id="cancel-masters">Cancel sync</button>
+            <div id="masters-list" class="masters-list">
+              <div class="empty">Connect ERPNext to load master counts.</div>
+            </div>
+            <p id="masters-selection-help" class="field-note"></p>
+            <details class="advanced-options">
+              <summary>
+                Import options
+                <span>Limits, duplicate names and opening stock</span>
+              </summary>
+              <div class="masters-options">
+                <label class="check"
+                  ><input id="masters-include-disabled" type="checkbox" />
+                  Include disabled records</label
+                >
+                <label class="check"
+                  ><input id="masters-include-openings" type="checkbox" />
+                  Include item opening stock</label
+                >
+                <label class="masters-limit"
+                  >Limit per group<input
+                    id="masters-limit"
+                    type="number"
+                    min="1"
+                    step="1"
+                    placeholder="All"
+                /></label>
+                <label class="masters-limit"
+                  >Duplicate names<select id="masters-duplicate-names">
+                    <option value="skip">Skip duplicates</option>
+                    <option value="suffix">Add ERPNext ID</option>
+                  </select></label
+                >
+              </div>
+            </details>
+            <div class="masters-actions sticky-actions">
+              <button class="button primary" id="sync-masters">
+                Sync selected to Tally
+              </button>
+              <button class="button danger hidden" id="cancel-masters">
+                Stop after current request
+              </button>
             </div>
           </article>
           <article class="panel">
             <div class="panel-heading">
-              <div><p class="eyebrow">LAST RUN</p><h2>Masters sync results</h2></div>
+              <div>
+                <p class="eyebrow">LAST RUN</p>
+                <h2>Last master data run</h2>
+              </div>
               <span class="tag" id="masters-last-run">Not run</span>
             </div>
-            <div id="masters-results"><div class="empty">Select one or more master types and run the sync.</div></div>
+            <div id="masters-results">
+              <div class="empty">
+                Select one or more master types and run the sync.
+              </div>
+            </div>
           </article>
         </section>
 
         <section class="page" data-page-panel="history">
           <article class="panel">
-            <div class="panel-heading"><div><p class="eyebrow">AUDIT TRAIL</p><h2>Synchronization history</h2></div></div>
-            <div class="list-toolbar">
-              <label class="search-field"><span class="visually-hidden">Search history</span><input id="history-search" type="search" placeholder="Search by flow, source, or error" autocomplete="off" /></label>
-              <label class="inline-field">Direction<select id="history-direction"><option value="">All directions</option><option value="erpnext_to_tally">ERPNext → Tally</option><option value="tally_to_erpnext">Tally → ERPNext</option></select></label>
-              <span class="tag" id="history-count" aria-live="polite">0 runs</span>
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">AUDIT TRAIL</p>
+                <h2>Transaction run history</h2>
+              </div>
             </div>
+            <div class="list-toolbar">
+              <label class="search-field"
+                ><span class="visually-hidden">Search history</span
+                ><input
+                  id="history-search"
+                  type="search"
+                  placeholder="Search by flow, source, or error"
+                  autocomplete="off"
+              /></label>
+              <label class="inline-field"
+                >Direction<select id="history-direction">
+                  <option value="">All directions</option>
+                  <option value="erpnext_to_tally">ERPNext → Tally</option>
+                  <option value="tally_to_erpnext">Tally → ERPNext</option>
+                </select></label
+              >
+              <span class="tag" id="history-count" aria-live="polite"
+                >0 runs</span
+              >
+            </div>
+            <p class="field-note">
+              Shows the latest 20 transaction flow runs. Master data results are
+              on the Master data page.
+            </p>
             <div id="full-history"></div>
           </article>
         </section>
 
         <section class="page" data-page-panel="operations">
           <article class="panel operations-toolbar">
-            <div><p class="eyebrow">FLOW CONTROL</p><h2>Operate and troubleshoot</h2></div>
+            <div>
+              <p class="eyebrow">FLOW CONTROL</p>
+              <h2>Configure, preview and run</h2>
+            </div>
             <label>Flow<select id="operation-flow"></select></label>
-            <button class="button secondary" id="refresh-operation">Refresh</button>
-            <button class="button secondary" id="preview-operation">Preview pending</button>
-            <button class="button primary" id="retry-operation">Run / retry flow</button>
+            <button class="button secondary" id="refresh-operation">
+              Refresh
+            </button>
+            <button class="button secondary" id="preview-operation">
+              Preview records
+            </button>
+            <button class="button primary" id="retry-operation">
+              Run this flow
+            </button>
           </article>
-          <div id="operation-error" class="alert hidden"></div>
+          <p class="field-note">
+            1. Choose a flow. 2. Review its configuration. 3. Preview records.
+            4. Run the flow.
+          </p>
+          <div id="operation-error" class="alert hidden" role="alert"></div>
+          <div
+            id="operation-feedback"
+            class="notice hidden"
+            role="status"
+            aria-live="polite"
+          ></div>
           <div class="operation-status" id="operation-status"></div>
           <div class="layout-grid operations-grid">
             <article class="panel">
-              <div class="panel-heading"><div><p class="eyebrow">SAFE START</p><h2>First-run checklist</h2></div></div>
-              <div id="setup-checklist" class="checklist"><div class="empty">Select a configurable flow.</div></div>
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">SAFE START</p>
+                  <h2>First-run checklist</h2>
+                </div>
+              </div>
+              <div id="setup-checklist" class="checklist">
+                <div class="empty">Select a configurable flow.</div>
+              </div>
             </article>
             <article class="panel">
-              <div class="panel-heading"><div><p class="eyebrow">FLOW OPTIONS</p><h2>Configuration</h2></div></div>
-              <div id="flow-options" class="form-grid"><div class="empty">This flow has no additional settings.</div></div>
-              <div class="form-actions"><button class="button primary" id="save-flow-options">Save flow configuration</button></div>
+              <div class="panel-heading">
+                <div>
+                  <p class="eyebrow">FLOW OPTIONS</p>
+                  <h2>Configuration</h2>
+                </div>
+              </div>
+              <div id="flow-options" class="form-grid">
+                <div class="empty">This flow has no additional settings.</div>
+              </div>
+              <div class="form-actions">
+                <span
+                  id="operation-unsaved"
+                  class="field-note"
+                  aria-live="polite"
+                ></span
+                ><button class="button primary" id="save-flow-options">
+                  Save flow configuration
+                </button>
+              </div>
             </article>
           </div>
           <article class="panel hidden" id="mapping-panel">
-            <div class="panel-heading"><div><p class="eyebrow">LEDGER POLICY</p><h2>Tally ledger mappings</h2></div><div class="inline-actions"><button class="button secondary" id="add-preview-ledgers">Add preview ledgers</button><button class="button secondary" id="add-mapping">Add mapping</button></div></div>
-            <p class="muted">Map only names that do not match automatically. Party mappings require both a party type and party.</p>
-            <datalist id="account-options"></datalist><datalist id="customer-options"></datalist><datalist id="supplier-options"></datalist>
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">LEDGER POLICY</p>
+                <h2>Tally ledger mappings</h2>
+              </div>
+              <div class="inline-actions">
+                <button class="button secondary" id="add-preview-ledgers">
+                  Add preview ledgers</button
+                ><button class="button secondary" id="add-mapping">
+                  Add mapping
+                </button>
+              </div>
+            </div>
+            <p class="muted">
+              Map only names that do not match automatically. Party mappings
+              require both a party type and party.
+            </p>
+            <datalist id="account-options"></datalist
+            ><datalist id="customer-options"></datalist
+            ><datalist id="supplier-options"></datalist>
             <div class="mapping-table" id="mapping-rows"></div>
           </article>
           <article class="panel">
-            <div class="panel-heading"><div><p class="eyebrow">READ ONLY</p><h2>Pending preview</h2></div><span class="tag" id="preview-count">Not loaded</span></div>
-            <div id="preview-results"><div class="empty">Preview a flow before its first run or after correcting a failure.</div></div>
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">READ ONLY</p>
+                <h2>Pending preview</h2>
+              </div>
+              <span class="tag" id="preview-count">Not loaded</span>
+            </div>
+            <div id="preview-results">
+              <div class="empty">
+                Preview a flow before its first run or after correcting a
+                failure.
+              </div>
+            </div>
           </article>
           <article class="panel">
-            <div class="panel-heading"><div><p class="eyebrow">BALANCE PROOF</p><h2>Reconciliation</h2></div></div>
-            <div id="reconciliation-results"><div class="empty">No reconciliation records for this flow.</div></div>
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">BALANCE PROOF</p>
+                <h2>Reconciliation</h2>
+              </div>
+            </div>
+            <div id="reconciliation-results">
+              <div class="empty">No reconciliation records for this flow.</div>
+            </div>
           </article>
           <article class="panel">
-            <div class="panel-heading"><div><p class="eyebrow">SERVER AUDIT</p><h2>Record-level sync activity</h2></div></div>
-            <div id="activity-results"><div class="empty">No server activity for this flow.</div></div>
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">SERVER AUDIT</p>
+                <h2>Record-level sync activity</h2>
+              </div>
+            </div>
+            <div id="activity-results">
+              <div class="empty">No server activity for this flow.</div>
+            </div>
           </article>
         </section>
 
         <section class="page" data-page-panel="settings">
           <form class="panel settings-form" id="settings-form">
-            <div class="panel-heading"><div><p class="eyebrow">CONNECTOR CONFIGURATION</p><h2>Settings</h2></div></div>
-            <div class="form-section">
-              <h3>ERPNext connection</h3>
-              <div class="form-grid">
-                <label class="wide">ERPNext URL<input name="frappe_url" type="url" placeholder="https://erp.example.com" required /></label>
-                <label>API key<input name="api_key" autocomplete="off" required /></label>
-                <label>API secret<input name="api_secret" type="password" autocomplete="new-password" placeholder="Leave masked value unchanged" /></label>
-                <label>ERPNext company<input name="erpnext_company" required /></label>
-                <label>Target ID<input name="target_id" pattern="[A-Za-z0-9][A-Za-z0-9_.:-]{0,139}" required /></label>
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">CONNECTOR CONFIGURATION</p>
+                <h2>Connect your companies</h2>
               </div>
             </div>
             <div class="form-section">
-              <h3>TallyPrime connection</h3>
+              <h3><span class="step-number">1</span> ERPNext connection</h3>
+              <p class="field-note">
+                Use credentials for a user with access to the company you want
+                to sync.
+              </p>
               <div class="form-grid">
-                <label>Tally URL<input name="tally_url" type="url" required /></label>
-                <label>Tally company<input name="tally_company" required /></label>
-                <label>Educational date override<input name="voucher_date_override" type="date" /><small>Leave blank on licensed Tally.</small></label>
+                <label class="wide"
+                  >ERPNext URL<input
+                    name="frappe_url"
+                    type="url"
+                    placeholder="https://erp.example.com"
+                    required
+                /></label>
+                <label
+                  >API key<input name="api_key" autocomplete="off" required
+                /></label>
+                <label
+                  >API secret<input
+                    name="api_secret"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="Leave masked value unchanged"
+                /></label>
+                <label
+                  >ERPNext company<input name="erpnext_company" required
+                /></label>
+                <label
+                  >Connector ID<input
+                    name="target_id"
+                    pattern="[A-Za-z0-9][A-Za-z0-9_.:-]{0,139}"
+                    placeholder="e.g. office-tally"
+                    required
+                  /><small
+                    >A stable, unique name for this connector. Keep it unchanged
+                    after syncing.</small
+                  ></label
+                >
               </div>
             </div>
             <div class="form-section">
-              <h3>Synchronization</h3>
+              <h3><span class="step-number">2</span> TallyPrime connection</h3>
+              <p class="field-note">
+                Open the correct company in Tally and enable its HTTP server
+                (usually port 9000).
+              </p>
               <div class="form-grid">
-                <label>Batch size<input name="batch_size" type="number" min="1" max="100" required /></label>
-                <label>Automatic interval (seconds)<input name="poll_interval_seconds" type="number" min="10" max="86400" required /></label>
-                <label>Request timeout (seconds)<input name="request_timeout_seconds" type="number" min="1" max="300" required /></label>
-                <label>From date<input name="from_date" type="date" /></label>
-                <label>To date<input name="to_date" type="date" /></label>
+                <label
+                  >Tally URL<input name="tally_url" type="url" required
+                /></label>
+                <label
+                  >Tally company name<input
+                    name="tally_company"
+                    placeholder="Exact name shown in Tally"
+                    required
+                /></label>
+                <label
+                  >Educational date override<input
+                    name="voucher_date_override"
+                    type="date"
+                  /><small>Leave blank on licensed Tally.</small></label
+                >
               </div>
-              <fieldset><legend>Automatic directions</legend><label class="check"><input name="auto_outbound" type="checkbox" /> ERPNext → Tally</label><label class="check"><input name="auto_inbound" type="checkbox" /> Tally → ERPNext</label></fieldset>
-			  <label class="check"><input name="submit_inbound_documents" type="checkbox" /> Submit imported Tally vouchers automatically</label>
-			  <p class="field-note">Leave this off while testing. Inbound invoices, payments, journals, and stock entries will be created as drafts for review.</p>
-			  <label class="check"><input name="update_stock_from_inbound" type="checkbox" /> Update ERPNext stock from imported Tally invoices</label>
-			  <p class="field-note">Enable only when Tally is the inventory source of truth for these invoices.</p>
-              <label class="check"><input name="open_browser_on_start" type="checkbox" /> Open Control Centre when the connector starts</label>
-			  <label class="check"><input name="start_with_windows" type="checkbox" /> Start the connector automatically with Windows</label>
             </div>
-            <div class="form-section">
-              <h3>Masters sync</h3>
-              <div class="form-grid">
-                <label>Customer ledger group<input name="customer_parent" required /></label>
-                <label>Supplier ledger group<input name="supplier_parent" required /></label>
-                <label>Master batch size<input name="master_batch_size" type="number" min="1" max="1000" required /><small>Requested maximum; capped at 25 masters and 64 KiB per request. Slow responses reduce the batch size.</small></label>
-                <label>CA bundle path (optional)<input name="ca_bundle" placeholder="C:\path\to\ca.pem" /><small>The bridge includes a CA bundle by default. Set this only for a private CA.</small></label>
+            <details class="advanced-options settings-advanced">
+              <summary>
+                Sync preferences
+                <span>Schedule, date filters and import behavior</span>
+              </summary>
+              <div class="form-section">
+                <h3>Transaction sync</h3>
+                <div class="form-grid">
+                  <label
+                    >Batch size<input
+                      name="batch_size"
+                      type="number"
+                      min="1"
+                      max="100"
+                      required
+                  /></label>
+                  <label
+                    >Automatic interval (seconds)<input
+                      name="poll_interval_seconds"
+                      type="number"
+                      min="10"
+                      max="86400"
+                      required
+                  /></label>
+                  <label
+                    >Request timeout (seconds)<input
+                      name="request_timeout_seconds"
+                      type="number"
+                      min="1"
+                      max="300"
+                      required
+                  /></label>
+                  <label>From date<input name="from_date" type="date" /></label>
+                  <label>To date<input name="to_date" type="date" /></label>
+                </div>
+                <fieldset>
+                  <legend>Automatic directions</legend>
+                  <label class="check"
+                    ><input name="auto_outbound" type="checkbox" /> ERPNext →
+                    Tally</label
+                  ><label class="check"
+                    ><input name="auto_inbound" type="checkbox" /> Tally →
+                    ERPNext</label
+                  >
+                </fieldset>
+                <label class="check"
+                  ><input name="submit_inbound_documents" type="checkbox" />
+                  Submit imported Tally vouchers automatically</label
+                >
+                <p class="field-note">
+                  Leave this off while testing. Inbound invoices, payments,
+                  journals, and stock entries will be created as drafts for
+                  review.
+                </p>
+                <label class="check"
+                  ><input name="update_stock_from_inbound" type="checkbox" />
+                  Update ERPNext stock from imported Tally invoices</label
+                >
+                <p class="field-note">
+                  Enable only when Tally is the inventory source of truth for
+                  these invoices.
+                </p>
+                <label class="check"
+                  ><input name="open_browser_on_start" type="checkbox" /> Open
+                  Control Centre when the connector starts</label
+                >
+                <label class="check"
+                  ><input name="start_with_windows" type="checkbox" /> Start the
+                  connector automatically with Windows</label
+                >
               </div>
-              <label class="check"><input name="verify_tls" type="checkbox" /> Verify ERPNext HTTPS certificate</label>
+              <div class="form-section">
+                <h3>Masters sync</h3>
+                <div class="form-grid">
+                  <label
+                    >Customer ledger group<input
+                      name="customer_parent"
+                      required
+                  /></label>
+                  <label
+                    >Supplier ledger group<input
+                      name="supplier_parent"
+                      required
+                  /></label>
+                  <label
+                    >Master batch size<input
+                      name="master_batch_size"
+                      type="number"
+                      min="1"
+                      max="1000"
+                      required
+                    /><small
+                      >Requested maximum; capped at 25 masters and 64 KiB per
+                      request. Slow responses reduce the batch size.</small
+                    ></label
+                  >
+                  <label
+                    >CA bundle path (optional)<input
+                      name="ca_bundle"
+                      placeholder="C:\path\to\ca.pem"
+                    /><small
+                      >The bridge includes a CA bundle by default. Set this only
+                      for a private CA.</small
+                    ></label
+                  >
+                </div>
+                <label class="check"
+                  ><input name="verify_tls" type="checkbox" /> Verify ERPNext
+                  HTTPS certificate</label
+                >
+              </div>
+            </details>
+            <details class="advanced-options recovery-options">
+              <summary>
+                Recovery &amp; service
+                <span>Reset progress or stop this connector</span>
+              </summary>
+              <div class="form-section">
+                <h3>Bridge service</h3>
+                <p class="muted">
+                  Stop the local Control Centre process. Restart it from
+                  start-control-centre.cmd or the Windows scheduled task.
+                </p>
+                <div class="form-actions">
+                  <button type="button" class="button danger" id="stop-bridge">
+                    Stop bridge
+                  </button>
+                </div>
+              </div>
+              <div class="form-section">
+                <h3>Replay inbound records</h3>
+                <p class="muted">
+                  Reset the checkpoint to offer Tally records to ERPNext again.
+                  Existing sync logs still prevent duplicate versions.
+                </p>
+                <button
+                  type="button"
+                  class="button danger"
+                  id="reset-checkpoints"
+                >
+                  Reset inbound checkpoint
+                </button>
+              </div>
+            </details>
+            <div id="settings-error" class="alert hidden" role="alert"></div>
+            <div class="form-actions sticky-actions">
+              <span
+                id="settings-save-status"
+                class="field-note"
+                aria-live="polite"
+                >All changes saved</span
+              ><button
+                type="button"
+                class="button secondary"
+                id="settings-test"
+              >
+                Save and test connections</button
+              ><button type="submit" class="button primary">
+                Save settings
+              </button>
             </div>
-            <div class="form-section">
-              <h3>Bridge service</h3>
-              <p class="muted">Stop the local Control Centre process. Restart it from start-control-centre.cmd or the Windows scheduled task.</p>
-              <div class="form-actions"><button type="button" class="button danger" id="stop-bridge">Stop bridge</button></div>
-            </div>
-			<div class="form-actions"><button type="button" class="button danger" id="reset-checkpoints">Reset inbound checkpoint</button><button type="button" class="button secondary" id="settings-test">Save and test</button><button type="submit" class="button primary">Save settings</button></div>
           </form>
         </section>
       </main>

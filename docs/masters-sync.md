@@ -1,6 +1,6 @@
 # Masters sync (ERPNext → TallyPrime)
 
-The Control Centre **Masters sync** page pushes ERPNext master data to the
+The Control Centre **Master data** page pushes ERPNext master data to the
 TallyPrime company loaded on the same Windows machine. It is deliberately
 one-way: ERPNext is the source of truth, and Tally masters are created or
 altered by name.
@@ -133,7 +133,7 @@ Duplicate display names are resolved as follows:
 
 ## Running a sync
 
-1. Open **Masters sync** in the Control Centre.
+1. Open **Master data** in the Control Centre.
 2. Select one or more groups. Items, Warehouses, Customers, and Suppliers are
    enabled by default.
 3. Optionally enable **Include disabled records** or
