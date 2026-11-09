@@ -1,0 +1,36 @@
+name: Control Centre checks
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+    paths:
+      - "control-centre/**"
+      - "express_tally/bridge/**"
+      - ".github/workflows/control-centre.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: control-centre/package-lock.json
+      - run: npm --prefix control-centre ci
+      - run: npm --prefix control-centre exec -- playwright install --with-deps chromium
+      - run: npm --prefix control-centre run build && npm --prefix control-centre run check
+      - run: npm --prefix control-centre run test:ui
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: control-centre-browser-failures
+          path: control-centre/test-results/
+          retention-days: 7

@@ -1,14 +1,18 @@
 {
   "name": "@express-tally/control-centre",
-  "version": "1.1.4",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "Local Windows control centre for ERPNext and TallyPrime synchronization",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "check": "node --check src/app.js && node --check src/operations.js && node --check src/masters.js && node scripts/build.mjs --check"
+    "check": "node --check src/app.js && node --check src/operations.js && node --check src/masters.js && node scripts/build.mjs --check",
+    "test:ui": "playwright test"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0"
   }
 }
