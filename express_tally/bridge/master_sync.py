@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from datetime import date
 
 from .clients import BridgeRequestError
@@ -56,7 +57,9 @@ PAYLOAD_PATH = "/api/method/express_tally.integrations.master_sync_export.get_ma
 
 # Keep individual JSONEx requests modest so Tally remains responsive on large
 # item/customer sets and a single failed request does not lose the whole run.
-MASTER_BATCH_SIZE = 250
+MASTER_BATCH_SIZE = 10
+MAX_MASTER_BATCH_SIZE = 25
+MAX_MASTER_REQUEST_BYTES = 64 * 1024
 
 DUPLICATE_POLICIES = frozenset({"skip", "suffix"})
 DEFAULT_CUSTOMER_PARENT = "Sundry Debtors"
@@ -102,7 +105,7 @@ def normalize_duplicate_policy(value):
 
 def configured_batch_size(config):
 	value = int(getattr(config, "master_batch_size", MASTER_BATCH_SIZE) or MASTER_BATCH_SIZE)
-	return min(max(value, 1), 1000)
+	return min(max(value, 1), MAX_MASTER_BATCH_SIZE)
 
 
 def batch_result(
@@ -167,6 +170,7 @@ class MasterSyncService:
 		duplicate_names="skip",
 		cancel_event=None,
 	):
+		self._existing_names_by_type.clear()
 		selected = normalize_masters(masters)
 		duplicate_policy = normalize_duplicate_policy(duplicate_names)
 		batch_size = configured_batch_size(self.config)
@@ -248,7 +252,7 @@ class MasterSyncService:
 			("Name",),
 		)
 		response = self.tally.export_collection(request)
-		records = parse_collection_export(response, tags)
+		records = parse_collection_export(response, tags, raise_on_error=True)
 		names = {master_name(row) for row in records if master_name(row)}
 		self._existing_names_by_type[object_type] = names
 		LOGGER.info("Existing Tally %s masters: %s", object_type, len(names))
@@ -261,6 +265,7 @@ class MasterSyncService:
 			metadata = message.setdefault("metadata", {})
 			name = message.get("name") or metadata.get("name") or ""
 			metadata["action"] = "alter" if str(name).casefold() in existing_folded else "create"
+			existing_folded.add(str(name).casefold())
 
 	def _run_batches(self, batches, batch_size, cancel_event):
 		results = []
@@ -283,6 +288,8 @@ class MasterSyncService:
 					"Skipped after an earlier batch failed",
 					total=len(messages),
 				)
+			elif not messages:
+				result = batch_result(parts, "Success", "Nothing to sync")
 			else:
 				try:
 					existing_names = self._existing_names(parts["key"])
@@ -296,8 +303,7 @@ class MasterSyncService:
 					)
 					LOGGER.warning("Master lookup %s failed: %s", parts["key"], exc)
 				else:
-					self._apply_actions(messages, existing_names)
-					result = self._run_batch(parts, messages, batch_size, cancel_event)
+					result = self._run_batch(parts, messages, batch_size, cancel_event, existing_names)
 			if result["status"] == "Cancelled":
 				was_cancelled = True
 			if result["status"] in {"Failed", "Cancelled"}:
@@ -305,22 +311,38 @@ class MasterSyncService:
 			results.append(result)
 		return results, failed, was_cancelled
 
-	def _run_batch(self, parts, messages, batch_size, cancel_event):
+	def _run_batch(self, parts, messages, batch_size, cancel_event, existing_names=None):
 		if not messages:
 			return batch_result(parts, "Success", "Nothing to sync")
 
 		created = altered = ignored = errors = requests = 0
 		status = "Success"
 		message = ""
-		for offset in range(0, len(messages), batch_size):
+		offset = 0
+		while offset < len(messages):
 			if is_cancelled(cancel_event):
 				status = "Cancelled"
 				message = "Cancelled by operator"
 				break
 			chunk = messages[offset : offset + batch_size]
-			requests += 1
 			try:
+				if existing_names is not None:
+					self._apply_actions(chunk, existing_names)
+				while self._request_size(chunk) > MAX_MASTER_REQUEST_BYTES and len(chunk) > 1:
+					chunk = chunk[:max(1, len(chunk) // 2)]
+				if self._request_size(chunk) > MAX_MASTER_REQUEST_BYTES:
+					raise BridgeRequestError("A single master exceeds the safe 64 KiB request limit")
+				requests += 1
+				started = time.monotonic()
 				imported = self._import_chunk(chunk)
+				elapsed = time.monotonic() - started
+				offset += len(chunk)
+				# Reduce future work before a slow response becomes a timeout.
+				target = min(2.0, float(getattr(self.config, "request_timeout_seconds", 30)) / 5)
+				if elapsed > target:
+					batch_size = max(1, min(batch_size, len(chunk)) // 2)
+				LOGGER.info("Master chunk %s: records=%s seconds=%.2f next_size=%s",
+					parts["key"], len(chunk), elapsed, batch_size)
 			except Exception as exc:
 				status = "Failed"
 				message = f"{parts['label']} batch failed: {exc}"[:4000]
@@ -336,6 +358,9 @@ class MasterSyncService:
 				message = imported.message or f"{parts['label']} was rejected by Tally"
 				LOGGER.warning("Master batch %s rejected: %s", parts["key"], message)
 				break
+			if existing_names is not None:
+				existing_names.update(str(row.get("name") or row.get("metadata", {}).get("name") or "")
+					for row in chunk)
 
 		if status == "Success":
 			LOGGER.info(
@@ -359,16 +384,21 @@ class MasterSyncService:
 			total=len(messages),
 		)
 
-	def _import_chunk(self, chunk):
-		request = {
+	def _request(self, chunk):
+		return {
 			"static_variables": [
 				{"name": "svMstImportFormat", "value": "jsonex"},
 				{"name": "svCurrentCompany", "value": self.config.tally_company},
 			],
 			"tallymessage": chunk,
 		}
+
+	def _request_size(self, chunk):
+		return len(json.dumps(self._request(chunk), ensure_ascii=False).encode("utf-8"))
+
+	def _import_chunk(self, chunk):
 		return self.tally.import_json(
-			request,
+			self._request(chunk),
 			"All Masters",
 			require_change=False,
 			allow_ignored=True,

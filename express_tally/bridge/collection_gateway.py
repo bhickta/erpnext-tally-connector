@@ -94,12 +94,17 @@ def build_collection_export(
 	return ET.tostring(envelope, encoding="unicode")
 
 
-def parse_collection_export(payload, record_tags):
+def parse_collection_export(payload, record_tags, *, raise_on_error=False):
 	"""Parse Tally's collection XML while retaining repeated nested entries."""
 	try:
 		root = ET.fromstring(_clean_tally_xml(payload))
 	except ET.ParseError as exc:
 		raise ValueError(f"Tally returned invalid collection XML: {exc!s}") from exc
+	if raise_on_error:
+		for element in root.iter():
+			tag = xml_tag(element.tag).upper()
+			if tag == "LINEERROR" or (tag == "STATUS" and (element.text or "").strip() == "0"):
+				raise ValueError(f"Tally collection export failed: {(element.text or 'Unknown error')[:1000]}")
 	tags = {normalized_key(tag) for tag in record_tags}
 	records = []
 	for element in root.iter():

@@ -31,7 +31,7 @@ def build(runtime, output):
 		)
 		files.extend(
 			repo / "express_tally" / "tests" / name
-			for name in ("test_bridge.py", "test_payments.py", "test_ledger_bridge.py")
+			for name in ("test_bridge.py", "test_payments.py", "test_ledger_bridge.py", "test_tally_safety.py")
 		)
 		files.append(repo / "tally_plugin" / "install-portable.ps1")
 		for path in files:

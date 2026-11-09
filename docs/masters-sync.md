@@ -149,9 +149,33 @@ The bridge imports dependency batches in this order:
 account groups -> account ledgers -> units -> item groups -> warehouses -> customers -> suppliers -> items
 ```
 
-Each batch is split into requests of up to 250 masters. A failed request stops
-the run so later batches do not fail against missing dependencies. The results
-table shows created, altered, ignored, and error counts per group.
+Master requests default to 10 records and are capped at 25 records and 64 KiB
+of encoded JSON, including when older settings specify a larger batch size.
+Slow successful responses reduce the remaining batch size. An individual
+master exceeding 64 KiB is rejected locally; reduce its oversized fields before
+retrying. A failed request stops the run so later batches do not fail against
+missing dependencies. The results table shows confirmed created, altered,
+ignored, and error counts per group; a transport failure has an unknown outcome
+and the affected records may already have been imported.
+
+All XML and JSON calls to the same Tally endpoint share one process-wide
+request gate. Concurrent calls fail with a busy message rather than queueing
+more work in Tally. Calls have a minimum 250 ms pause, increasing with response
+time up to 2 seconds. Empty batches do not perform master lookups.
+
+A timeout or connection failure pauses further calls to that endpoint for the
+lifetime of the bridge process, including health checks and automatic sync.
+There is no automatic retry: disconnecting HTTP cannot cancel work inside Tally.
+Wait until Tally is responsive, inspect the imported records, and only then
+restart the bridge and rerun the sync. Existing master names are read again on
+each run and updated after each successful chunk so confirmed prior imports
+can be altered rather than created again. A rejected name lookup stops the run
+instead of treating the company as empty.
+Keep only one bridge process connected to a Tally instance; this gate cannot
+coordinate other processes or other applications. Name lookups still read the
+existing master names once per Tally object type per run. These safeguards
+reduce gateway pressure but cannot guarantee Tally responsiveness for every
+data set, plugin, storage system, or individual master.
 
 The same operation is available directly:
 
