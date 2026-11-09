@@ -18,13 +18,20 @@ Sales voucher type.
 ## Use on the Tally computer
 
 1. Download and extract `ERPNext-Tally-Control-Centre-Windows-x64.zip` from
-   [Tally Bridge Latest](https://github.com/bhickta/erpnext-tally-connector/releases/tag/tally-bridge-latest).
+   [the latest release](https://github.com/bhickta/erpnext-tally-connector/releases/latest).
 2. Double-click `ERPNextTallyControlCentre.exe`. The dashboard opens in the
    default browser; Python and Node.js are not required.
-3. Open **Settings**, enter the ERPNext URL/API credentials and the exact ERPNext
-   and Tally company names, then choose **Save and test**.
-4. Open **Sync flows**, enable the flows handled by this Tally computer, and save.
-5. Use either manual direction button or enable the automatic schedule.
+3. Open **Connections & settings**, enter the ERPNext URL/API credentials and
+   the exact ERPNext and Tally company names, then choose **Save and test connections**.
+4. Open **Master data** to send the items, customers, suppliers, and accounts
+   your transactions need. Review **Import options** before including opening stock.
+5. Open **Transaction flows**, enable compatible flows handled by this Tally
+   computer, and choose **Save enabled flows**.
+6. Select **Configure & preview** for a flow. In **Flow workspace**, review its
+   configuration, save any changes, select **Preview records**, then **Run this flow**.
+7. Use the **Dashboard** manual direction buttons or enable automatic transaction
+   sync. Check **Run history** for transaction results and **Master data** for master
+   results. Automatic transaction sync does not include master data.
 
 The executable listens only on `127.0.0.1:8765` by default. Settings, history,
 and the log are stored in `%LOCALAPPDATA%\Express Tally Control Centre`. Starting
@@ -52,7 +59,7 @@ ledger/party mapping and reconciliation policy.
 
 ## Masters sync
 
-The **Masters sync** page pushes Accounting Groups, Ledgers, Item, Warehouse,
+The **Master data** page pushes Accounting Groups, Ledgers, Item, Warehouse,
 Customer, and Supplier masters from ERPNext to the loaded Tally company.
 Ledger sync creates the accounting-group hierarchy; Item sync creates the
 required Units and Item Groups. Each pushed master stores the ERPNext document
@@ -63,6 +70,11 @@ The utility is one-way (ERPNext → Tally), never deletes Tally masters, and
 leaves item opening stock off unless explicitly enabled. See
 [`docs/masters-sync.md`](../docs/masters-sync.md) for the field mapping and
 alias contract.
+
+Selections survive count refreshes. A running import shows persistent progress;
+**Stop after current request** lets Tally finish its current work before skipping
+remaining batches. If a request times out, check Tally and the affected records
+before restarting the bridge and rerunning the selected masters.
 
 ## Advanced command-line operation
 
@@ -103,5 +115,5 @@ cross-origin control requests, settings responses mask the API secret, and the
 default listener is loopback-only.
 
 TallyPrime Educational Mode restricts accepted transaction dates. For a test
-company only, set the educational date override in Settings; leave it blank for
+company only, set the educational date override in Connections & settings; leave it blank for
 licensed operation.
