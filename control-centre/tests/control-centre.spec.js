@@ -411,3 +411,50 @@ test("an initial configuration read failure recovers on the next state poll", as
   await expect(page.locator("#context-erp")).toHaveText("ERP Company");
   expect(reads).toBeGreaterThan(1);
 });
+
+test("automatic sync cannot be enabled during master sync but can always be paused", async ({ page, backend }) => {
+  await openPage(page, "overview");
+  backend.status.masters_running = true;
+  await expect(page.locator("#auto-sync")).toBeDisabled();
+  backend.status.auto_sync_enabled = true;
+  await expect(page.locator("#auto-sync")).toBeChecked();
+  await expect(page.locator("#auto-sync")).toBeEnabled();
+  await page.locator("#auto-sync").uncheck();
+  await expect.poll(() => backend.status.auto_sync_enabled).toBe(false);
+});
+
+test("a workspace save blocks other configuration saves until its response is applied", async ({ page, backend }) => {
+  let release;
+  backend.handlers["/api/v1/config"] = async ({ request, body, reply }) => {
+    if (request.method() !== "PUT") return reply(backend.config);
+    await new Promise((resolve) => { release = resolve; });
+    backend.config = { ...backend.config, ...body };
+    return reply({ config: backend.config });
+  };
+  await openPage(page, "operations");
+  await page.locator('[data-flow-option="limit"]').fill("19");
+  await page.locator("#save-flow-options").click();
+  await expect.poll(() => Boolean(release)).toBe(true);
+  await page.locator('.nav-item[data-page="settings"]').click();
+  await expect(page.locator('#settings-form button[type="submit"]')).toBeDisabled();
+  release();
+  await expect(page.locator('#settings-form button[type="submit"]')).toBeEnabled();
+  await page.locator('[name="erpnext_company"]').fill("New Company");
+  // Permit the second save immediately.
+  backend.handlers["/api/v1/config"] = async ({ body, reply }) => {
+    backend.config = { ...backend.config, ...body }; return reply({ config: backend.config });
+  };
+  await page.locator('#settings-form button[type="submit"]').click();
+  await expect.poll(() => backend.config.erpnext_company).toBe("New Company");
+  expect(backend.config.flow_options[outbound.key].limit).toBe(19);
+});
+
+test("schema choice fields render a select and save the chosen branch", async ({ page, backend }) => {
+  backend.handlers["/api/v1/flow-details"] = async ({ url, reply }) => reply({ flow: backend.flows.find((flow) => flow.key === url.searchParams.get("flow")), configuration: { option_schema: [{ fieldname: "branch", label: "Branch", type: "select", options: ["Main", "North"] }] } });
+  await openPage(page, "operations");
+  const branch = page.locator('select[data-flow-option="branch"]');
+  await expect(branch).toBeVisible();
+  await branch.selectOption("North");
+  await page.locator("#save-flow-options").click();
+  await expect.poll(() => backend.config.flow_options[outbound.key]?.branch).toBe("North");
+});

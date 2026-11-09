@@ -45,7 +45,8 @@ function updateControls() {
     busy || syncing || !loaded || flow.available === false;
   $("#retry-operation").disabled =
     busy || syncing || !loaded || flow.available === false;
-  $("#save-flow-options").disabled = busy || !loaded;
+  $("#save-flow-options").disabled =
+    busy || dependencies.state.configSaving || !loaded;
   $("#add-mapping").disabled = busy || !loaded;
   $("#add-preview-ledgers").disabled =
     busy || !loaded || !previewRecords.length;
@@ -229,6 +230,14 @@ function renderOptions() {
             configured[field.fieldname] ?? defaults[field.fieldname] ?? "";
           if (field.type === "checkbox") {
             return `<label class="check wide"><input data-flow-option="${dependencies.escapeHtml(field.fieldname)}" type="checkbox" ${value ? "checked" : ""} ${field.read_only ? "disabled" : ""}/><span>${dependencies.escapeHtml(field.label)}</span></label>`;
+          }
+          if (field.type === "select") {
+            const values = Array.isArray(field.options)
+              ? field.options.map(String)
+              : [];
+            if (value && !values.includes(String(value)))
+              values.unshift(String(value));
+            return `<label>${dependencies.escapeHtml(field.label)}<select data-flow-option="${dependencies.escapeHtml(field.fieldname)}" ${field.read_only ? "disabled" : ""}><option value="">Use default</option>${values.map((option) => `<option value="${dependencies.escapeHtml(option)}" ${String(value) === option ? "selected" : ""}>${dependencies.escapeHtml(option)}</option>`).join("")}</select></label>`;
           }
           return `<label>${dependencies.escapeHtml(field.label)}<input data-flow-option="${dependencies.escapeHtml(field.fieldname)}" type="${["number", "date", "text"].includes(field.type) ? field.type : "text"}" value="${dependencies.escapeHtml(value)}" ${field.step ? `step="${dependencies.escapeHtml(field.step)}"` : ""} ${field.min !== undefined ? `min="${dependencies.escapeHtml(field.min)}"` : ""} ${field.read_only ? "readonly" : ""}/></label>`;
         })
@@ -521,6 +530,10 @@ function collectMappings() {
 async function saveOptions() {
   const flow = selectedFlow();
   if (!flow || pending.size || loadedFlowKey !== flow.key) return;
+  if (dependencies.state.configSaving)
+    throw new Error(
+      "A configuration save is in progress. Wait for it to finish, then save this flow.",
+    );
   const flowOptions = { ...(dependencies.state.config.flow_options || {}) };
   const options = { ...(flowOptions[flow.key] || {}) };
   for (const input of $("#flow-options").querySelectorAll(
@@ -539,6 +552,8 @@ async function saveOptions() {
     options.ledger_mappings = collectMappings();
   flowOptions[flow.key] = options;
   pending.add("save");
+  dependencies.state.configSaving = true;
+  notifyBusyChange();
   showError();
   feedback("Saving flow configuration…");
   updateControls();
@@ -553,6 +568,8 @@ async function saveOptions() {
     feedback("Flow configuration saved. You can preview or run this flow.");
   } finally {
     pending.delete("save");
+    dependencies.state.configSaving = false;
+    notifyBusyChange();
     updateControls();
   }
 }

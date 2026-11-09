@@ -45,6 +45,7 @@ const state = {
   historyDirection: "",
   health: null,
   settingsDirty: false,
+  settingsFields: new Set(),
   serviceOffline: false,
   syncPending: false,
   initialized: false,
@@ -313,7 +314,10 @@ function renderStatus() {
     state.serviceOffline ||
     Boolean($("#auto-sync").dataset.pending) ||
     (!state.status.auto_sync_enabled &&
-      (!flows.length || Boolean(state.status.configuration_error)));
+      (busy ||
+        state.healthPending ||
+        !flows.length ||
+        Boolean(state.status.configuration_error)));
   $("#auto-description").textContent = state.status.auto_sync_enabled
     ? `Enabled · runs every ${state.config.poll_interval_seconds || 60} seconds. Master data is not included.`
     : "Off. Turn on to run your saved transaction flows on a schedule.";
@@ -342,7 +346,25 @@ function renderStatus() {
     ? "Connection tests wait until the current sync finishes"
     : "Check saved ERPNext and Tally connections";
   $("#settings-test").disabled =
-    busy || state.healthPending || Boolean($("#settings-test").dataset.pending);
+    state.configSaving ||
+    busy ||
+    state.healthPending ||
+    Boolean($("#settings-test").dataset.pending);
+  const settingsSave = $('#settings-form button[type="submit"]');
+  settingsSave.disabled = Boolean(
+    state.configSaving || settingsSave.dataset.pending,
+  );
+  for (const [name, key] of [
+    ["submit_inbound_documents", "submit_documents"],
+    ["update_stock_from_inbound", "update_stock"],
+  ]) {
+    if (!state.settingsFields.has(name))
+      $("#settings-form").elements[name].checked = Boolean(
+        state.config.flow_options?.[
+          "express_tally.standard_vouchers_from_tally"
+        ]?.[key],
+      );
+  }
   $("#recent-history").innerHTML = historyTable(
     state.status.history || [],
     true,
@@ -411,6 +433,12 @@ async function loadState() {
 let healthLoading = false;
 async function loadHealth(showToast = false) {
   if (healthLoading || isBusy()) {
+    if (!state.health && isBusy()) {
+      $("#erp-status").textContent = $("#tally-status").textContent =
+        "Check after current operation";
+      $("#erp-detail").textContent = $("#tally-detail").textContent =
+        "Connection checks wait while Tally is in use.";
+    }
     if (showToast)
       toast("Wait for the current sync or connection test to finish.");
     return state.health;
@@ -559,8 +587,20 @@ function settingsPayload() {
         ...(state.config.flow_options?.[
           "express_tally.standard_vouchers_from_tally"
         ] || {}),
-        submit_documents: form.elements.submit_inbound_documents.checked,
-        update_stock: form.elements.update_stock_from_inbound.checked,
+        submit_documents: state.settingsFields.has("submit_inbound_documents")
+          ? form.elements.submit_inbound_documents.checked
+          : Boolean(
+              state.config.flow_options?.[
+                "express_tally.standard_vouchers_from_tally"
+              ]?.submit_documents,
+            ),
+        update_stock: state.settingsFields.has("update_stock_from_inbound")
+          ? form.elements.update_stock_from_inbound.checked
+          : Boolean(
+              state.config.flow_options?.[
+                "express_tally.standard_vouchers_from_tally"
+              ]?.update_stock,
+            ),
       },
     },
     open_browser_on_start: form.elements.open_browser_on_start.checked,
@@ -572,8 +612,12 @@ async function saveSettings(showSuccess = true) {
   const form = $("#settings-form");
   if (!form.reportValidity())
     throw new Error("Complete the required settings first.");
-  if (state.configSaving) return;
+  if (state.configSaving)
+    throw new Error(
+      "A configuration save is in progress. Wait for it to finish, then save your changes.",
+    );
   state.configSaving = true;
+  renderStatus();
   const revision = state.settingsRevision || 0;
   let response;
   try {
@@ -583,11 +627,13 @@ async function saveSettings(showSuccess = true) {
     });
   } finally {
     state.configSaving = false;
+    renderStatus();
   }
   state.config = response.config;
   if (revision === (state.settingsRevision || 0)) {
     form.elements.api_secret.value = state.config.api_secret;
     state.settingsDirty = false;
+    state.settingsFields.clear();
     $("#settings-save-status").textContent = "All changes saved";
   }
   if (showSuccess) toast("Settings saved.");
@@ -759,8 +805,14 @@ async function saveFlows() {
     }
     groups.set(flow.exclusive_group, flow.title || flow.key);
   });
+  if (state.configSaving)
+    throw new Error(
+      "A configuration save is in progress. Wait for it to finish.",
+    );
   state.flowsSaving = true;
+  state.configSaving = true;
   renderFlows();
+  renderStatus();
   try {
     const response = await api("/api/v1/config", {
       method: "PUT",
@@ -773,7 +825,9 @@ async function saveFlows() {
     await loadState();
   } finally {
     state.flowsSaving = false;
+    state.configSaving = false;
     renderFlows();
+    renderStatus();
   }
 }
 
@@ -802,6 +856,11 @@ async function triggerSync(direction) {
 
 async function toggleAutoSync(event) {
   const desired = event.target.checked;
+  if (desired && (isBusy() || state.healthPending)) {
+    event.target.checked = false;
+    toast("Wait for the current operation before enabling automatic sync.");
+    return;
+  }
   event.target.dataset.pending = "true";
   event.target.disabled = true;
   try {
@@ -903,8 +962,9 @@ function wireEvents() {
       updateFlowSaveStatus,
     ),
   );
-  $("#settings-form").addEventListener("input", () => {
+  $("#settings-form").addEventListener("input", (event) => {
     state.settingsDirty = true;
+    if (event.target.name) state.settingsFields.add(event.target.name);
     state.settingsRevision = (state.settingsRevision || 0) + 1;
     $("#settings-save-status").textContent = "Unsaved changes";
   });
