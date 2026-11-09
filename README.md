@@ -43,7 +43,7 @@ sync. No TDL or TCP file is installed in Tally.
 
 ## Masters sync
 
-The Control Centre includes a one-way **Masters sync** utility for Accounting
+The Control Centre includes a one-way **Master data** utility for Accounting
 Groups, Ledgers, Item, Warehouse, Customer, and Supplier. It writes the ERPNext
 identity into the Tally alias field, pushes account groups, Item Groups and
 Units automatically, and maps the available GST, address, contact, credit-limit,
@@ -95,6 +95,31 @@ agent profile. Payload mapping stays in the contributing app so different
 companies can implement different accounting policies without forking the
 connector. The bundled `inventory_sales_voucher_v1` profile supports SRV's
 current Sales Order/Delivery Note contract.
+
+## Using the Control Centre
+
+Start on **Dashboard**. It shows the connected companies, current activity, and a
+suggested next step. **Connections & settings** contains connection credentials;
+optional scheduling and import behavior are under **Sync preferences**.
+
+Use **Master data** to manually send items, customers, suppliers, warehouses, and
+accounts from ERPNext to Tally. This is separate from transaction synchronization.
+Selections stay unchanged when refreshing counts. Running jobs show a persistent
+status and can be stopped after the current Tally request completes.
+
+On **Transaction flows**, select compatible transaction types and save the
+selection. Use **Configure & preview** to open a flow in **Flow workspace**. Save
+any configuration edits, preview the pending records, then run the flow. Refresh
+and flow switches preserve unsaved workspace edits while the page stays open.
+The dashboard’s manual and automatic transaction actions use the saved flow
+selection. **Run history** shows recent transaction results; master data results
+remain on the Master data page.
+
+The UI retains its active page on reload, reports failed requests inline, and
+prevents overlapping sync, preview, and connection-test actions within the page.
+The bridge’s transport gate remains the final protection against concurrent
+requests from separate pages. See `control-centre/tests/README.md` for the mocked
+browser regression suite.
 
 ## Windows Control Centre
 
