@@ -123,12 +123,13 @@ def build_unit_import(company, messages):
 		action = str(row.get("metadata", {}).get("action") or "create").title()
 		unit = ET.SubElement(message, "UNIT", {"Action": action})
 		_element(unit, "NAME", name)
-		_element(unit, "ORIGINALNAME", row.get("originalname") or name)
-		_element(
-			unit,
-			"ISSIMPLEUNIT",
-			_yes_no(row.get("issimpleunit", True)),
-		)
+		simple = _yes_no(row.get("issimpleunit", True))
+		# ORIGINALNAME names the base unit of a compound unit. TallyPrime
+		# rejects it on a simple unit create with "DUPLICATE ORIGINAL NAME",
+		# so only send it when the unit is not simple.
+		if simple != "Yes":
+			_element(unit, "ORIGINALNAME", row.get("originalname") or name)
+		_element(unit, "ISSIMPLEUNIT", simple)
 		_element(unit, "DECIMALPLACES", row.get("decimalplaces") or "3")
 	return ET.tostring(root, encoding="unicode")
 

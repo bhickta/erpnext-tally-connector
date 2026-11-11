@@ -485,10 +485,38 @@ class TestMasterSyncService(TestCase):
 		self.assertIn("<REQUESTDATA>", xml)
 		self.assertIn('<UNIT Action="Create">', xml)
 		self.assertIn("<NAME>New Unit</NAME>", xml)
-		self.assertIn("<ORIGINALNAME>New Unit</ORIGINALNAME>", xml)
+		# TallyPrime rejects ORIGINALNAME on a simple unit create with
+		# "DUPLICATE ORIGINAL NAME".
+		self.assertNotIn("ORIGINALNAME", xml)
 		self.assertIn("<ISSIMPLEUNIT>Yes</ISSIMPLEUNIT>", xml)
 		self.assertIn("<DECIMALPLACES>3</DECIMALPLACES>", xml)
 		self.assertIn("<SVCURRENTCOMPANY>Tally Company</SVCURRENTCOMPANY>", xml)
+
+	def test_compound_units_keep_original_name(self):
+		batches = [
+			{
+				"key": "units",
+				"label": "Units",
+				"tallymessage": [
+					{
+						"metadata": {"type": "Unit", "action": "create", "name": "Box"},
+						"name": "Box",
+						"originalname": "NOS",
+						"issimpleunit": False,
+						"decimalplaces": "0",
+					}
+				],
+			}
+		]
+		tally = FakeTally()
+		service = MasterSyncService(self.config(), FakeFrappe(batches), tally)
+
+		result = service.sync(["Unit"])
+
+		self.assertTrue(result["ok"])
+		xml = tally.xml_requests[0]
+		self.assertIn("<ORIGINALNAME>NOS</ORIGINALNAME>", xml)
+		self.assertIn("<ISSIMPLEUNIT>No</ISSIMPLEUNIT>", xml)
 
 	def test_sync_can_be_cancelled_before_the_first_batch(self):
 		batches = [
