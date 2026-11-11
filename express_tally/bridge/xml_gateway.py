@@ -87,10 +87,11 @@ def _group(message, name, parent=""):
 def _unit(message, name):
 	# TallyPrime treats NAME as a method (not an identifying XML attribute) for
 	# Unit masters. Supplying NAME as an attribute makes 7.1 silently ignore it.
+	# ORIGINALNAME is only valid for compound units; on a simple unit Tally
+	# replies "DUPLICATE ORIGINAL NAME", so it is deliberately omitted here.
 	unit = _element(message, "UNIT", action="Create")
 	_element(unit, "NAME", name)
 	_element(unit, "ISSIMPLEUNIT", "Yes")
-	_element(unit, "ORIGINALNAME", name)
 	_element(unit, "DECIMALPLACES", "3")
 
 
