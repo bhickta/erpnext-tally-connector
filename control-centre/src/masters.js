@@ -9,10 +9,21 @@ let loadVersion = 0;
 let latestResult = null;
 let remoteResultSignature = "";
 
-function showError(message = "") {
+function traceUrl(traceId) {
+  return `/api/v1/masters/trace?id=${encodeURIComponent(traceId)}`;
+}
+
+function showError(message = "", traceId = "") {
   const element = $("#masters-error");
   if (!element) return;
   element.textContent = message;
+  if (message && traceId) {
+    const link = document.createElement("a");
+    link.href = traceUrl(traceId);
+    link.download = "";
+    link.textContent = "Download debug trace";
+    element.append(" ", link);
+  }
   element.classList.toggle("hidden", !message);
 }
 
@@ -219,6 +230,9 @@ function renderResults(result) {
   const countNote = result.summary_error
     ? `<p class="muted">Sync results are available, but source counts could not be refreshed: ${escape(result.summary_error)}</p>`
     : "";
+  const traceNote = result.trace_id
+    ? `<p class="muted">Send this run’s debug trace when reporting a problem: <a href="${traceUrl(result.trace_id)}" download>download debug trace</a></p>`
+    : "";
   const skipped = result.skipped || [];
   const skippedNote = skipped.length
     ? `<div class="alert">${skipped.length} duplicate name${skipped.length === 1 ? " was" : "s were"} skipped. Choose “Add ERPNext ID” to include them on the next run. ${escape(
@@ -238,7 +252,7 @@ function renderResults(result) {
   </tr>`,
     )
     .join("");
-  container.innerHTML = `${summary}${recovery}${countNote}${skippedNote}<div class="table-scroll"><table class="history-table">
+  container.innerHTML = `${summary}${recovery}${countNote}${traceNote}${skippedNote}<div class="table-scroll"><table class="history-table">
     <caption class="visually-hidden">Results of the latest master sync</caption>
     <thead><tr><th scope="col">Master type</th><th scope="col">Status</th><th scope="col">Created</th><th scope="col">Updated</th><th scope="col">Ignored</th><th scope="col">Errors</th><th scope="col">Details</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
@@ -375,6 +389,7 @@ async function syncMasters() {
   } catch (error) {
     showError(
       `${error.message} If the connection was lost while syncing, check Tally and the imported records before starting again.`,
+      error.traceId,
     );
     dependencies.toast(error.message, true);
   } finally {

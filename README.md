@@ -50,8 +50,10 @@ Groups before Items. It writes the ERPNext identity into the Tally alias field
 and maps the available GST, address, contact, credit-limit, barcode, UOM, and
 price fields.
 
-See [Masters sync](docs/masters-sync.md) for the alias contract, exhaustive
-field mapping, API, and limitations.
+Each run writes a downloadable JSONL debug trace (versions, lookups, chunk
+names, Tally results, and errors) that excludes secrets. See
+[Masters sync](docs/masters-sync.md) for the alias contract, exhaustive field
+mapping, API, trace, and limitations.
 
 
 ## Planned Features
