@@ -53,6 +53,23 @@ class TestTallyTransportSafety(TestCase):
 
 	@patch("express_tally.bridge.tally_transport.time.sleep")
 	@patch("express_tally.bridge.tally_transport.urllib.request.urlopen")
+	def test_reset_endpoint_allows_retry_after_pause(self, open_url, sleep):
+		open_url.side_effect = TimeoutError("timed out")
+		with self.assertRaisesRegex(BridgeRequestError, "outcome unknown"):
+			TallyClient().post_xml("x")
+		with self.assertRaisesRegex(BridgeRequestError, "paused"):
+			TallyClient().post_xml("x")
+		tally_transport.reset_endpoint("http://127.0.0.1:9000/")
+		response = Mock()
+		response.__enter__ = Mock(return_value=response)
+		response.__exit__ = Mock(return_value=False)
+		response.read.return_value = b"OK"
+		open_url.side_effect = None
+		open_url.return_value = response
+		self.assertEqual(TallyClient().post_xml("x"), "OK")
+
+	@patch("express_tally.bridge.tally_transport.time.sleep")
+	@patch("express_tally.bridge.tally_transport.urllib.request.urlopen")
 	def test_success_paces_next_request(self, open_url, sleep):
 		response = open_url.return_value.__enter__.return_value
 		response.read.return_value = b"OK"

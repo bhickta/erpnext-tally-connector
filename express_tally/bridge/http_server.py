@@ -234,6 +234,11 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 				self._json(200, {"ok": True, "message": "Bridge shutting down"})
 				threading.Thread(target=self._shutdown_bridge, daemon=True).start()
 				return
+			if path == "/api/v1/tally/resume":
+				if not self.server.is_control_centre:
+					raise ValueError("Tally resume requires Control Centre mode")
+				self._json(200, self.server.controller.resume_tally())
+				return
 			if path == "/api/v1/test-connections":
 				self._json(200, self.server.controller.health())
 				return

@@ -401,7 +401,7 @@ class TestMasterSyncService(TestCase):
 			self.assertEqual(report_id, "All Masters")
 			self.assertEqual(payload["static_variables"][1]["value"], "Tally Company")
 
-	def test_existing_tally_unit_is_altered_instead_of_created(self):
+	def test_existing_tally_unit_is_skipped_instead_of_altered(self):
 		batches = [
 			{
 				"key": "units",
@@ -421,9 +421,9 @@ class TestMasterSyncService(TestCase):
 		result = service.sync(["Item"])
 
 		self.assertTrue(result["ok"])
-		payload, _report_id = tally.requests[0]
-		self.assertEqual(payload["tallymessage"][0]["metadata"]["action"], "alter")
 		self.assertEqual(len(tally.exports), 1)
+		self.assertEqual(tally.requests, [])
+		self.assertIn("already exist", result["results"][0]["message"])
 
 	def test_sync_can_be_cancelled_before_the_first_batch(self):
 		batches = [

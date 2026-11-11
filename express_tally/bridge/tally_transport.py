@@ -30,6 +30,24 @@ def endpoint_state(url):
 		return _STATES.setdefault(key, EndpointState())
 
 
+def reset_endpoint(url):
+	"""Clear the paused state after the operator confirms Tally is responsive.
+
+	If a request is still holding the endpoint lock, do not force the reset;
+	the caller should wait or restart the bridge.
+	"""
+	state = endpoint_state(url)
+	if not state.lock.acquire(blocking=False):
+		raise RuntimeError(
+			"Tally is still busy with a request; wait for it to finish or restart the bridge"
+		)
+	try:
+		state.uncertain = False
+		state.ready_at = 0.0
+	finally:
+		state.lock.release()
+
+
 def send(request, timeout, error_type):
 	"""Never queue concurrent calls or retry a request whose outcome is unknown."""
 	state = endpoint_state(request.full_url)

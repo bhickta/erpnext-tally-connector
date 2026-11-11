@@ -1019,6 +1019,7 @@ async function initialize() {
     toast,
     escapeHtml,
     loadState,
+    loadHealth,
     onBusyChange: renderStatus,
   });
   state.initialized = true;
