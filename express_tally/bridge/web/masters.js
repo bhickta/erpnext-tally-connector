@@ -210,7 +210,7 @@ function renderResults(result) {
       messages,
     );
   const recovery = uncertain
-    ? '<div class="alert">The last request may still be running in Tally. Check Tally and the affected records. Restart the bridge only once Tally is responsive, then rerun the selected masters.</div>'
+    ? '<div class="alert">The last request may still be running in Tally. Check Tally and the affected records. Once Tally is responsive, clear the pause and test the connection. <button type="button" class="button secondary" id="resume-tally">Resume Tally requests</button></div>'
     : result.cancelled
       ? '<p class="muted">Completed changes are kept. Review the results before starting another sync.</p>'
       : !result.ok
@@ -242,6 +242,25 @@ function renderResults(result) {
     <caption class="visually-hidden">Results of the latest master sync</caption>
     <thead><tr><th scope="col">Master type</th><th scope="col">Status</th><th scope="col">Created</th><th scope="col">Updated</th><th scope="col">Ignored</th><th scope="col">Errors</th><th scope="col">Details</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
+  container
+    .querySelector("#resume-tally")
+    ?.addEventListener("click", resumeTally);
+}
+
+async function resumeTally() {
+  try {
+    const result = await dependencies.api("/api/v1/tally/resume", {
+      method: "POST",
+      body: "{}",
+    });
+    dependencies.toast(
+      result.message ||
+        "Tally request pause cleared. Test the connection before retrying.",
+    );
+    await dependencies.loadHealth?.(true);
+  } catch (error) {
+    dependencies.toast(error.message, true);
+  }
 }
 
 export function refreshMastersState() {

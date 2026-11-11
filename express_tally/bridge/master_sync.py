@@ -303,7 +303,35 @@ class MasterSyncService:
 					)
 					LOGGER.warning("Master lookup %s failed: %s", parts["key"], exc)
 				else:
-					result = self._run_batch(parts, messages, batch_size, cancel_event, existing_names)
+					if parts["key"] == "units":
+						# Units do not support aliases and altering a unit that is
+						# already used by stock/vouchers can crash TallyPrime.
+						# Keep existing units untouched; only create new ones.
+						existing_folded = {name.casefold() for name in existing_names}
+						messages[:] = [
+							message
+							for message in messages
+							if str(
+								message.get("name")
+								or message.get("metadata", {}).get("name")
+								or ""
+							).casefold()
+							not in existing_folded
+						]
+						if not messages:
+							result = batch_result(
+								parts,
+								"Success",
+								"All Tally units already exist; existing units were not altered",
+							)
+						else:
+							result = self._run_batch(
+								parts, messages, batch_size, cancel_event, existing_names
+							)
+					else:
+						result = self._run_batch(
+							parts, messages, batch_size, cancel_event, existing_names
+						)
 			if result["status"] == "Cancelled":
 				was_cancelled = True
 			if result["status"] in {"Failed", "Cancelled"}:
@@ -345,7 +373,18 @@ class MasterSyncService:
 					parts["key"], len(chunk), elapsed, batch_size)
 			except Exception as exc:
 				status = "Failed"
-				message = f"{parts['label']} batch failed: {exc}"[:4000]
+				chunk_names = ", ".join(
+					str(
+						row.get("name")
+						or row.get("metadata", {}).get("name")
+						or ""
+					)
+					for row in chunk[:5]
+				)
+				message = (
+					f"{parts['label']} batch failed: {exc} "
+					f"[chunk: {chunk_names}]"
+				)[:4000]
 				errors += len(chunk)
 				LOGGER.warning("Master batch %s failed: %s", parts["key"], exc)
 				break

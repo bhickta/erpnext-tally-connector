@@ -13,6 +13,7 @@ from .clients import FrappeClient, TallyClient
 from .config import ConfigStore
 from .master_sync import MasterSyncService
 from .service import SyncService
+from .tally_transport import reset_endpoint
 
 LOGGER = logging.getLogger("erpnext_tally_bridge")
 
@@ -202,6 +203,13 @@ class ControlCentre:
 				return {"cancelled": False, "message": "No masters sync is running"}
 			self._masters_cancel.set()
 			return {"cancelled": True, "message": "Cancelling after the current Tally request"}
+
+	def resume_tally(self):
+		reset_endpoint(self.config().tally_url)
+		return {
+			"ok": True,
+			"message": "Tally request pause cleared. Test the connection before retrying.",
+		}
 
 	def preview_flow(self, flow_key, limit=20):
 		service = self.make_service(require_flows=False)

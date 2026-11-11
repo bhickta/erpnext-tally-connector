@@ -1,6 +1,6 @@
 {
   "name": "@express-tally/control-centre",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "type": "module",
   "description": "Local Windows control centre for ERPNext and TallyPrime synchronization",
