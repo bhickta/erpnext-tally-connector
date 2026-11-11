@@ -113,6 +113,11 @@ def parse_collection_export(payload, record_tags, *, raise_on_error=False):
 		value = _element_value(element)
 		if not isinstance(value, dict):
 			value = {"value": value}
+		# A record name can be exposed only as an XML attribute, especially for
+		# Unit exports where no child elements are returned. Preserve it so
+		# existing-master lookups do not treat an existing unit as new.
+		for key, attribute_value in element.attrib.items():
+			value.setdefault(f"_{normalized_key(key)}", attribute_value)
 		value["_xml_tag"] = xml_tag(element.tag)
 		records.append(value)
 	return records

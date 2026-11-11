@@ -357,9 +357,9 @@ class FakeTally:
 	def export_collection(self, request):
 		self.exports.append(request)
 		if "<TYPE>Unit</TYPE>" in request:
+			# Real Tally Unit exports can expose only the NAME attribute.
 			rows = "".join(
-				f'<UNIT NAME="{name}"><NAME>{name}</NAME></UNIT>'
-				for name in sorted(self.existing_units)
+				f'<UNIT NAME="{name}"></UNIT>' for name in sorted(self.existing_units)
 			)
 			return f"<ENVELOPE><DATA><COLLECTION>{rows}</COLLECTION></DATA></ENVELOPE>"
 		return "<ENVELOPE><DATA><COLLECTION></COLLECTION></DATA></ENVELOPE>"

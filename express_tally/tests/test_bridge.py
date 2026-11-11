@@ -265,6 +265,17 @@ class TestTallyCollectionGateway(TestCase):
 		self.assertEqual(record["name"], "ABCD")
 		self.assertEqual(record["parent"], "Valid\tTab")
 
+	def test_collection_parser_retains_attribute_only_record_names(self):
+		payload = (
+			"<ENVELOPE><DATA><COLLECTION>"
+			'<UNIT NAME="14 Pkg"></UNIT>'
+			"</COLLECTION></DATA></ENVELOPE>"
+		)
+		record = parse_collection_export(payload, ("UNIT",))[0]
+
+		self.assertEqual(record["_name"], "14 Pkg")
+		self.assertEqual(record["_xml_tag"], "UNIT")
+
 	def test_collection_parser_accepts_undeclared_tally_udf_tags(self):
 		payload = (
 			"<ENVELOPE><VOUCHER><UDF:_UDF_123.LIST>"
