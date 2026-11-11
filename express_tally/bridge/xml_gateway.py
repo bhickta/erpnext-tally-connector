@@ -94,6 +94,46 @@ def _unit(message, name):
 	_element(unit, "DECIMALPLACES", "3")
 
 
+def build_unit_import(company, messages):
+	"""Build the documented Tally XML master import for Unit records.
+
+	TallyPrime's JSON master importer reports an exception for Unit records,
+	which can also leave an error dialog on the desktop and block further HTTP
+	requests. Units use the XML master import format documented by Tally.
+	"""
+	root = ET.Element("ENVELOPE")
+	header = _element(root, "HEADER")
+	_element(header, "TALLYREQUEST", "Import Data")
+	body = _element(root, "BODY")
+	importdata = _element(body, "IMPORTDATA")
+	requestdesc = _element(importdata, "REQUESTDESC")
+	_element(requestdesc, "REPORTNAME", "All Masters")
+	variables = _element(requestdesc, "STATICVARIABLES")
+	_element(variables, "SVCURRENTCOMPANY", company)
+	requestdata = _element(importdata, "REQUESTDATA")
+	message = ET.SubElement(
+		requestdata, "TALLYMESSAGE", {"xmlns:UDF": "TallyUDF"}
+	)
+	for row in messages:
+		name = str(
+			row.get("name") or row.get("metadata", {}).get("name") or ""
+		).strip()
+		if not name:
+			continue
+		action = str(row.get("metadata", {}).get("action") or "create").title()
+		unit = ET.SubElement(message, "UNIT", {"Action": action})
+		_element(unit, "NAME", name)
+		simple = _yes_no(row.get("issimpleunit", True))
+		# ORIGINALNAME names the base unit of a compound unit. TallyPrime
+		# rejects it on a simple unit create with "DUPLICATE ORIGINAL NAME",
+		# so only send it when the unit is not simple.
+		if simple != "Yes":
+			_element(unit, "ORIGINALNAME", row.get("originalname") or name)
+		_element(unit, "ISSIMPLEUNIT", simple)
+		_element(unit, "DECIMALPLACES", row.get("decimalplaces") or "3")
+	return ET.tostring(root, encoding="unicode")
+
+
 def _godown(message, name):
 	godown = _element(message, "GODOWN", name=name, action="Create")
 	_element(godown, "NAME", name)

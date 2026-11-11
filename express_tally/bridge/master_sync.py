@@ -499,7 +499,7 @@ class MasterSyncService:
 				)
 				requests += 1
 				started = time.monotonic()
-				imported = self._import_chunk(chunk)
+				imported = self._import_chunk(chunk, parts["key"])
 				elapsed = time.monotonic() - started
 				offset += len(chunk)
 				# Reduce future work before a slow response becomes a timeout.
@@ -586,7 +586,18 @@ class MasterSyncService:
 	def _request_size(self, chunk):
 		return len(json.dumps(self._request(chunk), ensure_ascii=False).encode("utf-8"))
 
-	def _import_chunk(self, chunk):
+	def _import_chunk(self, chunk, batch_key=""):
+		if batch_key == "units":
+			# TallyPrime's JSON importer raises an exception for Unit masters
+			# and can open a modal that blocks its HTTP server. The XML master
+			# import is reliable for units, so keep them on that path.
+			from .xml_gateway import build_unit_import
+
+			return self.tally.import_xml(
+				build_unit_import(self.config.tally_company, chunk),
+				require_change=False,
+				allow_ignored=True,
+			)
 		return self.tally.import_json(
 			self._request(chunk),
 			"All Masters",
