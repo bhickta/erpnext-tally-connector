@@ -189,6 +189,7 @@ class ControlCentre:
 					"cancelled": result.get("cancelled"),
 					"skipped": result.get("skipped"),
 					"results": result.get("results"),
+					"trace_id": result.get("trace_id"),
 				}
 			return result
 		finally:
@@ -203,6 +204,23 @@ class ControlCentre:
 				return {"cancelled": False, "message": "No masters sync is running"}
 			self._masters_cancel.set()
 			return {"cancelled": True, "message": "Cancelling after the current Tally request"}
+
+	def master_trace(self, trace_id):
+		trace_id = str(trace_id or "").strip()
+		if (
+			not trace_id
+			or Path(trace_id).name != trace_id
+			or not trace_id.startswith("masters-")
+			or not trace_id.endswith(".jsonl")
+		):
+			raise ValueError("Invalid trace id")
+		trace_path = Path(self.config().runtime_directory) / "traces" / trace_id
+		if not trace_path.is_file():
+			raise FileNotFoundError("Trace not found")
+		return {
+			"trace_id": trace_id,
+			"content": trace_path.read_text(encoding="utf-8"),
+		}
 
 	def resume_tally(self):
 		reset_endpoint(self.config().tally_url)

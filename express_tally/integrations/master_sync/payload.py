@@ -7,6 +7,8 @@ import frappe
 from frappe import _
 from frappe.utils import cint
 
+from express_tally import __version__ as connector_version
+
 from .accounts import _account_messages, _stock_group_message, _unit_message
 from .constants import MASTER_SYNC_LABELS, MASTER_SYNC_TYPES
 from .items import _fetch_items, _item_messages
@@ -305,6 +307,7 @@ def build_master_sync_payload(
 	return {
 		"company": company,
 		"tally_company": frappe.get_cached_value("Company", company, "company_name"),
+		"connector_version": connector_version,
 		"masters": selected,
 		"include_disabled": bool(include_disabled),
 		"limit": limit,

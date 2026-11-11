@@ -5,8 +5,11 @@ import logging
 import time
 from datetime import date
 
+from express_tally import __version__ as bridge_version
+
 from .clients import BridgeRequestError
 from .collection_gateway import build_collection_export, parse_collection_export
+from .master_trace import MasterTrace
 from .normalization import master_name
 
 LOGGER = logging.getLogger("erpnext_tally_bridge.master_sync")
@@ -152,6 +155,12 @@ def batch_parts(batch):
 	return {"key": key, "label": label}, batch.get("tallymessage") or []
 
 
+def message_name(message):
+	return str(
+		message.get("name") or message.get("metadata", {}).get("name") or ""
+	)
+
+
 def is_cancelled(cancel_event):
 	return bool(cancel_event and cancel_event.is_set())
 
@@ -162,6 +171,7 @@ class MasterSyncService:
 		self.frappe = frappe_client
 		self.tally = tally_client
 		self._existing_names_by_type = {}
+		self._trace = None
 
 	def metadata(self):
 		return {"masters": [dict(master) for master in MASTER_TYPES]}
@@ -186,45 +196,105 @@ class MasterSyncService:
 		selected = normalize_masters(masters)
 		duplicate_policy = normalize_duplicate_policy(duplicate_names)
 		batch_size = configured_batch_size(self.config)
-		payload = self._fetch_payload(
+		trace = MasterTrace(
+			self.config,
 			selected,
-			include_disabled=include_disabled,
-			include_opening_balances=include_opening_balances,
-			limit=limit,
-			duplicate_names=duplicate_policy,
+			{
+				"batch_size": batch_size,
+				"include_disabled": bool(include_disabled),
+				"include_opening_balances": bool(include_opening_balances),
+				"limit": limit,
+				"duplicate_names": duplicate_policy,
+				"erpnext_company": self.config.erpnext_company,
+				"tally_company": self.config.tally_company,
+			},
+			bridge_version=bridge_version,
 		)
-		batches = payload.get("batches") or []
-		if not batches:
-			raise BridgeRequestError("ERPNext returned no master batches")
+		self._trace = trace
+		try:
+			payload = self._fetch_payload(
+				selected,
+				include_disabled=include_disabled,
+				include_opening_balances=include_opening_balances,
+				limit=limit,
+				duplicate_names=duplicate_policy,
+			)
+			batches = payload.get("batches") or []
+			trace.write(
+				"payload",
+				connector_version=payload.get("connector_version"),
+				tally_company=payload.get("tally_company"),
+				counts=payload.get("counts"),
+				skipped=payload.get("skipped") or [],
+				batches=[
+					{
+						"key": batch.get("key"),
+						"label": batch.get("label"),
+						"count": len(batch.get("tallymessage") or []),
+					}
+					for batch in batches
+				],
+			)
+			if not batches:
+				raise BridgeRequestError("ERPNext returned no master batches")
 
-		LOGGER.info(
-			"Master sync started: masters=%s batch_size=%s batches=%s",
-			selected,
-			batch_size,
-			len(batches),
-		)
-		results, failed, was_cancelled = self._run_batches(batches, batch_size, cancel_event)
-		summary, summary_error = self._safe_summary()
+			LOGGER.info(
+				"Master sync started: masters=%s batch_size=%s batches=%s trace=%s",
+				selected,
+				batch_size,
+				len(batches),
+				trace.trace_id or "unavailable",
+			)
+			results, failed, was_cancelled = self._run_batches(
+				batches, batch_size, cancel_event
+			)
+			summary, summary_error = self._safe_summary()
 
-		result = {
-			"ok": not failed,
-			"masters": selected,
-			"include_disabled": bool(include_disabled),
-			"include_opening_balances": bool(include_opening_balances),
-			"duplicate_names": duplicate_policy,
-			"cancelled": was_cancelled,
-			"skipped": payload.get("skipped") or [],
-			"results": results,
-			"summary": summary,
-			"summary_error": summary_error,
+			result = {
+				"ok": not failed,
+				"masters": selected,
+				"include_disabled": bool(include_disabled),
+				"include_opening_balances": bool(include_opening_balances),
+				"duplicate_names": duplicate_policy,
+				"cancelled": was_cancelled,
+				"skipped": payload.get("skipped") or [],
+				"results": results,
+				"summary": summary,
+				"summary_error": summary_error,
+				"trace_id": trace.trace_id,
+			}
+			trace.write(
+				"sync_end",
+				ok=result["ok"],
+				cancelled=result["cancelled"],
+				summary_error=summary_error,
+				results=results,
+			)
+			LOGGER.info(
+				"Master sync finished: ok=%s cancelled=%s failed_batches=%s",
+				result["ok"],
+				result["cancelled"],
+				sum(row["status"] == "Failed" for row in results),
+			)
+			return result
+		except Exception as exc:
+			trace.write("sync_error", error=str(exc)[:4000], error_type=type(exc).__name__)
+			exc.trace_id = trace.trace_id
+			raise
+		finally:
+			self._trace = None
+
+	def _trace_write(self, event, **fields):
+		if self._trace:
+			self._trace.write(event, **fields)
+
+	@staticmethod
+	def _trace_names(messages, limit=100):
+		names = [message_name(message) for message in messages]
+		return {
+			"names": names[:limit],
+			"truncated": len(names) > limit,
 		}
-		LOGGER.info(
-			"Master sync finished: ok=%s cancelled=%s failed_batches=%s",
-			result["ok"],
-			result["cancelled"],
-			sum(row["status"] == "Failed" for row in results),
-		)
-		return result
 
 	def _fetch_payload(
 		self,
@@ -255,7 +325,14 @@ class MasterSyncService:
 			return set()
 		object_type, tags = collection
 		if object_type in self._existing_names_by_type:
-			return self._existing_names_by_type[object_type]
+			names = self._existing_names_by_type[object_type]
+			self._trace_write(
+				"lookup_cached",
+				batch_key=batch_key,
+				object_type=object_type,
+				count=len(names),
+			)
+			return names
 		collection_name = f"ETExisting{object_type.replace(' ', '')}"
 		request = build_collection_export(
 			self.config.tally_company,
@@ -263,10 +340,34 @@ class MasterSyncService:
 			object_type,
 			("Name",),
 		)
-		response = self.tally.export_collection(request)
-		records = parse_collection_export(response, tags, raise_on_error=True)
+		self._trace_write(
+			"lookup_start",
+			batch_key=batch_key,
+			object_type=object_type,
+			collection=collection_name,
+			tally_company=self.config.tally_company,
+		)
+		try:
+			response = self.tally.export_collection(request)
+			records = parse_collection_export(response, tags, raise_on_error=True)
+		except Exception as exc:
+			self._trace_write(
+				"lookup_error",
+				batch_key=batch_key,
+				object_type=object_type,
+				error=str(exc)[:4000],
+				error_type=type(exc).__name__,
+			)
+			raise
 		names = {master_name(row) for row in records if master_name(row)}
 		self._existing_names_by_type[object_type] = names
+		self._trace_write(
+			"lookup_result",
+			batch_key=batch_key,
+			object_type=object_type,
+			count=len(names),
+			**self._trace_names([{"name": name} for name in sorted(names)], limit=200),
+		)
 		LOGGER.info("Existing Tally %s masters: %s", object_type, len(names))
 		return names
 
@@ -320,16 +421,24 @@ class MasterSyncService:
 						# already used by stock/vouchers can crash TallyPrime.
 						# Keep existing units untouched; only create new ones.
 						existing_folded = {name.casefold() for name in existing_names}
+						skipped = [
+							message
+							for message in messages
+							if message_name(message).casefold() in existing_folded
+						]
 						messages[:] = [
 							message
 							for message in messages
-							if str(
-								message.get("name")
-								or message.get("metadata", {}).get("name")
-								or ""
-							).casefold()
-							not in existing_folded
+							if message_name(message).casefold() not in existing_folded
 						]
+						if skipped:
+							self._trace_write(
+								"skip_existing",
+								batch_key=parts["key"],
+								reason="existing Tally units are never altered",
+								count=len(skipped),
+								**self._trace_names(skipped, limit=200),
+							)
 						if not messages:
 							result = batch_result(
 								parts,
@@ -348,6 +457,7 @@ class MasterSyncService:
 				was_cancelled = True
 			if result["status"] in {"Failed", "Cancelled"}:
 				failed = True
+			self._trace_write("batch_result", **result)
 			results.append(result)
 		return results, failed, was_cancelled
 
@@ -370,8 +480,23 @@ class MasterSyncService:
 					self._apply_actions(chunk, existing_names)
 				while self._request_size(chunk) > MAX_MASTER_REQUEST_BYTES and len(chunk) > 1:
 					chunk = chunk[:max(1, len(chunk) // 2)]
-				if self._request_size(chunk) > MAX_MASTER_REQUEST_BYTES:
+				request_bytes = self._request_size(chunk)
+				if request_bytes > MAX_MASTER_REQUEST_BYTES:
 					raise BridgeRequestError("A single master exceeds the safe 64 KiB request limit")
+				actions = {}
+				for row in chunk:
+					action = row.get("metadata", {}).get("action") or "create"
+					actions[action] = actions.get(action, 0) + 1
+				self._trace_write(
+					"chunk_start",
+					batch_key=parts["key"],
+					offset=offset,
+					size=len(chunk),
+					bytes=request_bytes,
+					actions=actions,
+					batch_size=batch_size,
+					**self._trace_names(chunk, limit=25),
+				)
 				requests += 1
 				started = time.monotonic()
 				imported = self._import_chunk(chunk)
@@ -381,17 +506,32 @@ class MasterSyncService:
 				target = min(2.0, float(getattr(self.config, "request_timeout_seconds", 30)) / 5)
 				if elapsed > target:
 					batch_size = max(1, min(batch_size, len(chunk)) // 2)
+				self._trace_write(
+					"chunk_result",
+					batch_key=parts["key"],
+					size=len(chunk),
+					seconds=round(elapsed, 3),
+					success=bool(imported.success),
+					created=imported.created,
+					altered=imported.altered,
+					ignored=imported.ignored,
+					errors=imported.errors,
+					message=str(imported.message or "")[:4000],
+					next_batch_size=batch_size,
+				)
 				LOGGER.info("Master chunk %s: records=%s seconds=%.2f next_size=%s",
 					parts["key"], len(chunk), elapsed, batch_size)
 			except Exception as exc:
 				status = "Failed"
-				chunk_names = ", ".join(
-					str(
-						row.get("name")
-						or row.get("metadata", {}).get("name")
-						or ""
-					)
-					for row in chunk[:5]
+				chunk_names = ", ".join(message_name(row) for row in chunk[:5])
+				self._trace_write(
+					"chunk_error",
+					batch_key=parts["key"],
+					offset=offset,
+					size=len(chunk),
+					error=str(exc)[:4000],
+					error_type=type(exc).__name__,
+					**self._trace_names(chunk, limit=25),
 				)
 				message = (
 					f"{parts['label']} batch failed: {exc} "
@@ -410,8 +550,7 @@ class MasterSyncService:
 				LOGGER.warning("Master batch %s rejected: %s", parts["key"], message)
 				break
 			if existing_names is not None:
-				existing_names.update(str(row.get("name") or row.get("metadata", {}).get("name") or "")
-					for row in chunk)
+				existing_names.update(message_name(row) for row in chunk)
 
 		if status == "Success":
 			LOGGER.info(

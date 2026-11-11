@@ -80,6 +80,17 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 		self.end_headers()
 		self.wfile.write(content)
 
+	def _download(self, filename, content):
+		data = content.encode("utf-8")
+		self.send_response(200)
+		self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+		self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+		self.send_header("Content-Length", str(len(data)))
+		self.send_header("Cache-Control", "no-store")
+		self.send_header("X-Content-Type-Options", "nosniff")
+		self.end_headers()
+		self.wfile.write(data)
+
 	def _request_json(self):
 		try:
 			length = int(self.headers.get("Content-Length", "0"))
@@ -112,7 +123,11 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 
 	def _handle_error(self, exc):
 		LOGGER.warning("Control API request failed: %s", exc)
-		self._json(400, {"ok": False, "error": str(exc)})
+		payload = {"ok": False, "error": str(exc)}
+		trace_id = getattr(exc, "trace_id", "")
+		if trace_id:
+			payload["trace_id"] = trace_id
+		self._json(400, payload)
 
 	def _shutdown_bridge(self):
 		# Give the HTTP response time to reach the browser before serve_forever
@@ -160,6 +175,22 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
 				self._json(200, self.server.controller.master_summary())
 			except Exception as exc:
 				self._json(503, {"error": str(exc)})
+			return
+		if path.path == "/api/v1/masters/trace":
+			if not self.server.is_control_centre:
+				self._json(404, {"error": "Not found"})
+				return
+			try:
+				query = urllib.parse.parse_qs(path.query)
+				trace = self.server.controller.master_trace(
+					str(query.get("id", [""])[0])
+				)
+			except FileNotFoundError as exc:
+				self._json(404, {"ok": False, "error": str(exc)})
+			except Exception as exc:
+				self._json(400, {"ok": False, "error": str(exc)})
+			else:
+				self._download(trace["trace_id"], trace["content"])
 			return
 		if path.path == "/api/v1/flows":
 			try:

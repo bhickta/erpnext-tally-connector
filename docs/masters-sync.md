@@ -205,6 +205,7 @@ The same operation is available directly:
 
 ```text
 GET  /api/v1/masters
+GET  /api/v1/masters/trace?id=<trace_id>
 POST /api/v1/masters/sync
 ```
 
@@ -224,6 +225,25 @@ Example body:
 customer, supplier, and item batches. When Items is selected together with
 Units or Item Groups, those dependency batches remain complete.
 `duplicate_names` accepts `skip` or `suffix`.
+
+### Debug trace
+
+Every master sync writes an append-only JSONL trace under
+`<runtime_directory>/traces/`, keeping the latest 20 runs. The trace records:
+
+- the bridge and ERPNext connector versions
+- the selected types, limits, and batch size
+- each batch and payload count
+- existing Tally name lookups and counts
+- existing units skipped
+- every chunk's names, create/alter actions, request size, result counts,
+  duration, and error
+
+API keys, secrets, and payment data are never written. The sync result
+includes a `trace_id`; the Control Centre shows **Download debug trace** next
+to the result, and the same file is available from
+`GET /api/v1/masters/trace?id=<trace_id>`. Send that file when reporting a
+master-sync problem.
 
 The bridge calls these Frappe methods:
 

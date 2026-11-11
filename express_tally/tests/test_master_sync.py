@@ -1,6 +1,7 @@
 import json
 import tempfile
 import threading
+import urllib.error
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -488,6 +489,131 @@ class TestMasterSyncService(TestCase):
 		self.assertEqual(result["results"][1]["status"], "Skipped")
 
 
+class TestMasterTrace(TestCase):
+	def config(self, directory):
+		return SimpleNamespace(
+			erpnext_company="ERP Company",
+			tally_company="Tally Company",
+			api_secret="super-secret-value",
+			runtime_directory=directory,
+		)
+
+	def read_events(self, directory, result):
+		self.assertTrue(result["trace_id"])
+		self.assertTrue(result["trace_id"].startswith("masters-"))
+		self.assertTrue(result["trace_id"].endswith(".jsonl"))
+		path = Path(directory) / "traces" / result["trace_id"]
+		self.assertTrue(path.is_file())
+		content = path.read_text(encoding="utf-8")
+		self.assertNotIn("super-secret-value", content)
+		return [json.loads(line) for line in content.splitlines() if line.strip()]
+
+	def test_sync_writes_a_debug_trace_and_returns_trace_id(self):
+		batches = [
+			{
+				"key": "items",
+				"label": "Items",
+				"tallymessage": [{"name": "ITEM-1"}, {"name": "ITEM-2"}],
+			}
+		]
+		with tempfile.TemporaryDirectory() as directory:
+			frappe = FakeFrappe(batches)
+			tally = FakeTally()
+			service = MasterSyncService(self.config(directory), frappe, tally)
+
+			with patch("express_tally.bridge.master_sync.MASTER_BATCH_SIZE", 1):
+				result = service.sync(["Item"])
+
+			events = self.read_events(directory, result)
+
+		self.assertEqual(events[0]["event"], "sync_start")
+		self.assertEqual(events[0]["selected"], ["Item"])
+		self.assertEqual(events[-1]["event"], "sync_end")
+		names = [event["event"] for event in events]
+		for expected in (
+			"payload",
+			"lookup_start",
+			"lookup_result",
+			"chunk_start",
+			"chunk_result",
+			"batch_result",
+			"sync_end",
+		):
+			self.assertIn(expected, names)
+		chunks = [event for event in events if event["event"] == "chunk_start"]
+		self.assertEqual([event["size"] for event in chunks], [1, 1])
+		results = [event for event in events if event["event"] == "chunk_result"]
+		self.assertTrue(all(event["success"] for event in results))
+		batch = next(event for event in events if event["event"] == "batch_result")
+		self.assertEqual(batch["status"], "Success")
+		self.assertEqual(batch["created"], 2)
+		self.assertTrue(events[-1]["ok"])
+
+	def test_trace_records_skipped_existing_units(self):
+		batches = [
+			{
+				"key": "units",
+				"label": "Units",
+				"tallymessage": [
+					{"metadata": {"type": "Unit", "action": "create", "name": "14 Pkg"}, "name": "14 Pkg"},
+					{"metadata": {"type": "Unit", "action": "create", "name": "New Unit"}, "name": "New Unit"},
+				],
+			}
+		]
+		with tempfile.TemporaryDirectory() as directory:
+			service = MasterSyncService(
+				self.config(directory),
+				FakeFrappe(batches),
+				FakeTally(existing_units={"14 Pkg"}),
+			)
+			result = service.sync(["Unit"])
+			events = self.read_events(directory, result)
+
+		skip = next(event for event in events if event["event"] == "skip_existing")
+		self.assertEqual(skip["count"], 1)
+		self.assertEqual(skip["names"], ["14 Pkg"])
+		chunks = [event for event in events if event["event"] == "chunk_start"]
+		self.assertEqual(chunks[0]["names"], ["New Unit"])
+
+	def test_failed_sync_still_writes_trace_and_attaches_trace_id(self):
+		class BrokenFrappe:
+			def request(self, method, path, data=None):
+				raise RuntimeError("ERPNext rejected the payload")
+
+		with tempfile.TemporaryDirectory() as directory:
+			service = MasterSyncService(
+				self.config(directory), BrokenFrappe(), FakeTally()
+			)
+			with self.assertRaises(RuntimeError) as caught:
+				service.sync(["Item"])
+			trace_id = caught.exception.trace_id
+			path = Path(directory) / "traces" / trace_id
+			self.assertTrue(path.is_file())
+			events = [
+				json.loads(line)
+				for line in path.read_text(encoding="utf-8").splitlines()
+				if line.strip()
+			]
+
+		self.assertEqual(events[-1]["event"], "sync_error")
+		self.assertIn("ERPNext rejected the payload", events[-1]["error"])
+
+	def test_trace_files_are_pruned_to_the_latest_runs(self):
+		from express_tally.bridge.master_trace import MasterTrace
+
+		with tempfile.TemporaryDirectory() as directory:
+			trace_dir = Path(directory) / "traces"
+			trace_dir.mkdir(parents=True)
+			for index in range(25):
+				(trace_dir / f"masters-202601{index:02d}T000000Z-{index:08x}.jsonl").write_text(
+					"{}\n", encoding="utf-8"
+				)
+
+			trace = MasterTrace(self.config(directory), ["Item"], {})
+			self.assertTrue(trace.available)
+			self.assertLessEqual(len(list(trace_dir.glob("masters-*.jsonl"))), 20)
+
+
 class FakeMasterService:
 	def metadata(self):
 		return {
@@ -580,6 +706,27 @@ class TestMasterSyncHTTP(TestCase):
 				with urllib.request.urlopen(cancel_request, timeout=2) as response:
 					cancel = json.loads(response.read())
 				self.assertFalse(cancel["cancelled"])
+
+				trace_dir = Path(directory) / "traces"
+				trace_dir.mkdir()
+				trace_id = "masters-20260101T000000Z-abcdef12.jsonl"
+				trace_content = '{"event":"sync_start","selected":["Item"]}\n'
+				(trace_dir / trace_id).write_text(trace_content, encoding="utf-8")
+				with urllib.request.urlopen(
+					f"{base_url}/api/v1/masters/trace?id={trace_id}", timeout=2
+				) as response:
+					self.assertEqual(response.status, 200)
+					self.assertIn(
+						"attachment", response.headers["Content-Disposition"]
+					)
+					self.assertEqual(response.read().decode(), trace_content)
+
+				with self.assertRaises(urllib.error.HTTPError) as caught:
+					urllib.request.urlopen(
+						f"{base_url}/api/v1/masters/trace?id=../secret", timeout=2
+					)
+				self.assertEqual(caught.exception.code, 400)
+				caught.exception.close()
 			finally:
 				controller.shutdown()
 				server.shutdown()

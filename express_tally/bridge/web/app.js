@@ -26,10 +26,13 @@ const api = async (path, options = {}) => {
       `The bridge returned an unreadable response (${response.status}).`,
     );
   });
-  if (!response.ok && !options.allowError)
-    throw new Error(
+  if (!response.ok && !options.allowError) {
+    const error = new Error(
       payload.error || payload.message || `Request failed (${response.status})`,
     );
+    error.traceId = payload.trace_id || "";
+    throw error;
+  }
   return payload;
 };
 
