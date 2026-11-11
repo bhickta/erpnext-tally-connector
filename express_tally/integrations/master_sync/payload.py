@@ -61,11 +61,13 @@ def build_master_sync_summary(company):
 		"Ledger": frappe.db.count(
 			"Account", {"company": company, "is_group": 0, "disabled": 0}
 		),
+		"Unit": frappe.db.count("UOM"),
+		"Item Group": frappe.db.count("Item Group"),
 		"Item": frappe.db.count("Item", {"disabled": 0}),
 		"Warehouse": frappe.db.count("Warehouse", {"company": company, "disabled": 0}),
 		"Customer": frappe.db.count("Customer", {"disabled": 0}),
 		"Supplier": frappe.db.count("Supplier", {"disabled": 0}),
-		"Item Group": frappe.db.count("Item Group"),
+		# Kept for the Item count subtitle.
 		"UOM": frappe.db.count("UOM"),
 	}
 
@@ -147,7 +149,7 @@ def build_master_sync_payload(
 				}
 			)
 
-	if "Item" in selected:
+	if "Unit" in selected:
 		# Include every UOM, including disabled ones that an active item may
 		# still reference. Tally needs the unit before the stock item.
 		uom_rows = frappe.get_all(
@@ -155,17 +157,19 @@ def build_master_sync_payload(
 			fields=["name", "uom_name", "must_be_whole_number"],
 			order_by="name",
 		)
-		item_groups = frappe.get_all(
-			"Item Group",
-			fields=["name", "item_group_name", "parent_item_group"],
-			order_by="lft",
-		)
 		batches.append(
 			{
 				"key": "units",
 				"label": "Units of measure",
 				"tallymessage": [_unit_message(row) for row in uom_rows],
 			}
+		)
+
+	if "Item Group" in selected:
+		item_groups = frappe.get_all(
+			"Item Group",
+			fields=["name", "item_group_name", "parent_item_group"],
+			order_by="lft",
 		)
 		batches.append(
 			{
@@ -265,9 +269,13 @@ def build_master_sync_payload(
 			# units/groups referenced by the selected masters.
 			if batch["key"] == "account_groups" and "Ledger" in selected:
 				continue
+			if batch["key"] in {"units", "item_groups"} and "Item" in selected:
+				continue
 			if batch["key"] in {
 				"account_groups",
 				"account_ledgers",
+				"units",
+				"item_groups",
 				"warehouses",
 				"customers",
 				"suppliers",
@@ -281,6 +289,10 @@ def build_master_sync_payload(
 			counts["Group"] = len(batch["tallymessage"])
 		elif batch["key"] == "account_ledgers":
 			counts["Ledger"] = len(batch["tallymessage"])
+		elif batch["key"] == "units":
+			counts["Unit"] = len(batch["tallymessage"])
+		elif batch["key"] == "item_groups":
+			counts["Item Group"] = len(batch["tallymessage"])
 		elif batch["key"] == "items":
 			counts["Item"] = len(batch["tallymessage"])
 		elif batch["key"] == "warehouses":

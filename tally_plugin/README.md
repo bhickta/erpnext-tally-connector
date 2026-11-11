@@ -59,12 +59,11 @@ ledger/party mapping and reconciliation policy.
 
 ## Masters sync
 
-The **Master data** page pushes Accounting Groups, Ledgers, Item, Warehouse,
-Customer, and Supplier masters from ERPNext to the loaded Tally company.
-Ledger sync creates the accounting-group hierarchy; Item sync creates the
-required Units and Item Groups. Each pushed master stores the ERPNext document
-name in the Tally alias, so a Tally record can always be mapped back to its
-ERPNext source.
+The **Master data** page pushes Accounting Groups, Ledgers, Units of measure,
+Item Groups, Items, Warehouses, Customers, and Suppliers from ERPNext to the
+loaded Tally company. Each type can be synced independently; run Units and
+Item Groups before Items. Ledger sync creates the accounting-group hierarchy.
+Each pushed master stores the ERPNext document name in the Tally alias.
 
 The utility is one-way (ERPNext → Tally), never deletes Tally masters, and
 leaves item opening stock off unless explicitly enabled. See

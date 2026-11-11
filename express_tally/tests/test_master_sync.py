@@ -38,6 +38,26 @@ class TestMasterAliases(TestCase):
 		self.assertIn("ERPNext:Customer:CUST-0001", names)
 
 
+class TestSeparateMasterTypes(TestCase):
+	def test_unit_and_item_group_are_independently_selectable(self):
+		from express_tally.bridge.master_sync import MASTER_KEYS, normalize_masters
+		from express_tally.integrations.master_sync.constants import MASTER_SYNC_TYPES
+		from express_tally.integrations.master_sync.payload import _parse_master_types
+
+		self.assertIn("Unit", MASTER_SYNC_TYPES)
+		self.assertIn("Item Group", MASTER_SYNC_TYPES)
+		self.assertIn("Unit", MASTER_KEYS)
+		self.assertIn("Item Group", MASTER_KEYS)
+		self.assertEqual(
+			_parse_master_types(["Unit", "Item Group"]), ["Unit", "Item Group"]
+		)
+		self.assertEqual(
+			normalize_masters(["Unit", "Item Group"]), ["Unit", "Item Group"]
+		)
+		self.assertIn("Unit", normalize_masters(None))
+		self.assertIn("Item Group", normalize_masters(None))
+
+
 class TestNamePolicy(TestCase):
 	def test_item_names_use_display_and_suffix_duplicates(self):
 		items = [

@@ -114,7 +114,7 @@ function updateControls() {
           ? "Save the ERPNext and Tally connection settings before syncing masters."
           : !selected
             ? "Select the master types you want to send."
-            : `${selected} master type${selected === 1 ? "" : "s"} will be sent to ${dependencies.state.config.tally_company}. Dependencies such as units and item groups are included automatically.`;
+            : `${selected} master type${selected === 1 ? "" : "s"} will be sent to ${dependencies.state.config.tally_company}. Sync Units and Item Groups before Items.`;
   const button = $("#sync-masters");
   if (button) {
     button.disabled =

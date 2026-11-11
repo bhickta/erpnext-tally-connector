@@ -11,15 +11,24 @@ altered by name.
 | --- | --- | --- |
 | Accounting groups | `Account` where `is_group = 1` | `Group` |
 | Ledgers | `Account` where `is_group = 0` | `Ledger` |
-| Items | `Item` (plus `Item Group` and `UOM`) | `Stock Item` (plus `Stock Group` and `Unit`) |
+| Units of measure | `UOM` | `Unit` |
+| Item groups | `Item Group` | `Stock Group` |
+| Items | `Item` | `Stock Item` |
 | Warehouses | `Warehouse` | `Godown` |
 | Customers | `Customer` | `Ledger` under `Sundry Debtors` |
 | Suppliers | `Supplier` | `Ledger` under `Sundry Creditors` |
 
-`Ledger` automatically includes the accounting-group hierarchy. `Item`
-automatically includes **all UOMs** (including disabled units that an active
-item may reference) and the item-group hierarchy. `Warehouse`, `Customer` and
-`Supplier` have no extra dependencies.
+Each type is selectable independently so you can sync one doctype at a time.
+For a complete sync, run them in this order:
+
+```text
+account groups -> account ledgers -> units -> item groups
+-> warehouses -> customers -> suppliers -> items
+```
+
+`Ledger` includes the accounting-group hierarchy as a dependency. Units and
+Item Groups are separate master types; sync them before Items. Existing Tally
+units are skipped, never altered.
 
 ## Alias contract
 
@@ -31,6 +40,8 @@ the remaining names are aliases.
 | --- | --- | --- |
 | Group | ERPNext `account_name` without the company abbreviation | raw ERPNext `name`, then `ERPNext:Account:<name>` |
 | Ledger | ERPNext `account_name` without the company abbreviation | raw ERPNext `name`, then `ERPNext:Account:<name>` |
+| Unit | ERPNext `uom_name` | Tally units do not support aliases |
+| Item Group | ERPNext item group name | raw ERPNext `name`, then `ERPNext:Item Group:<name>` |
 | Item | ERPNext `item_name` (or `item_code` when blank) | item `item_code`, then `ERPNext:Item:<item_code>` |
 | Warehouse | `warehouse_name` without the company abbreviation | raw ERPNext `name`, then `ERPNext:Warehouse:<name>` |
 | Customer | `customer_name` | raw ERPNext `name` when different, then `ERPNext:Customer:<name>` |
@@ -74,6 +85,19 @@ Duplicate display names are resolved as follows:
 - `ledgercode`: ERPNext `account_number` when present, otherwise the ERPNext `name`
 - `currency`: non-company account currency when present
 - `isdeleted`: disabled ledgers, when **Include disabled records** is enabled
+
+### Unit → Tally Unit
+
+- `name`: ERPNext `uom_name`
+- `originalname`: ERPNext `uom_name`
+- `decimalplaces`: `0` when `must_be_whole_number`, otherwise `3`
+- existing Tally units are **skipped**, not altered
+
+### Item Group → Stock Group
+
+- `name`: ERPNext `Item Group` name
+- `parent`: parent item group; `All Item Groups` becomes Tally Primary
+- `shouldquantitiesbeadded`: true
 
 ### Item → Stock Item
 
@@ -138,9 +162,9 @@ Duplicate display names are resolved as follows:
    enabled by default.
 3. Optionally enable **Include disabled records** or
    **Include item opening stock**.
-4. Optionally set **Limit per group** to test a small batch. Dependency units
-   and item groups remain complete, so limited item tests still reference
-   valid masters.
+4. Optionally set **Limit per group** to test a small batch. When Unit or
+   Item Group is synced alone, the limit applies. When Items is selected with
+   those dependencies, their batches remain complete.
 5. Select **Sync selected to Tally**.
 
 The bridge imports dependency batches in this order:
@@ -188,7 +212,7 @@ Example body:
 
 ```json
 {
-  "masters": ["Group", "Ledger", "Item", "Warehouse", "Customer", "Supplier"],
+  "masters": ["Group", "Ledger", "Unit", "Item Group", "Item", "Warehouse", "Customer", "Supplier"],
   "include_disabled": false,
   "include_opening_balances": false,
   "limit": null,
@@ -196,8 +220,9 @@ Example body:
 }
 ```
 
-`limit` is optional and applies to the warehouse, customer, supplier, and
-item batches. Dependency units and item groups are always complete.
+`limit` is optional and applies to the selected unit, item-group, warehouse,
+customer, supplier, and item batches. When Items is selected together with
+Units or Item Groups, those dependency batches remain complete.
 `duplicate_names` accepts `skip` or `suffix`.
 
 The bridge calls these Frappe methods:
