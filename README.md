@@ -44,10 +44,11 @@ sync. No TDL or TCP file is installed in Tally.
 ## Masters sync
 
 The Control Centre includes a one-way **Master data** utility for Accounting
-Groups, Ledgers, Item, Warehouse, Customer, and Supplier. It writes the ERPNext
-identity into the Tally alias field, pushes account groups, Item Groups and
-Units automatically, and maps the available GST, address, contact, credit-limit,
-barcode, UOM, and price fields.
+Groups, Ledgers, Units of measure, Item Groups, Items, Warehouses, Customers,
+and Suppliers. Each type is selectable independently; sync Units and Item
+Groups before Items. It writes the ERPNext identity into the Tally alias field
+and maps the available GST, address, contact, credit-limit, barcode, UOM, and
+price fields.
 
 See [Masters sync](docs/masters-sync.md) for the alias contract, exhaustive
 field mapping, API, and limitations.

@@ -2,11 +2,22 @@
 
 from ..tally_export import DEFAULT_ACCOUNT_GROUPS
 
-MASTER_SYNC_TYPES = ("Group", "Ledger", "Item", "Warehouse", "Customer", "Supplier")
+MASTER_SYNC_TYPES = (
+	"Group",
+	"Ledger",
+	"Unit",
+	"Item Group",
+	"Item",
+	"Warehouse",
+	"Customer",
+	"Supplier",
+)
 
 MASTER_SYNC_LABELS = {
 	"Group": "Accounting groups",
 	"Ledger": "Ledgers",
+	"Unit": "Units of measure",
+	"Item Group": "Item groups",
 	"Item": "Items",
 	"Warehouse": "Warehouses",
 	"Customer": "Customers",
@@ -16,6 +27,8 @@ MASTER_SYNC_LABELS = {
 TALLY_MASTER_TYPES = {
 	"Group": "Group",
 	"Ledger": "Ledger",
+	"Unit": "Unit",
+	"Item Group": "Stock Group",
 	"Item": "Stock Item",
 	"Warehouse": "Godown",
 	"Customer": "Ledger",

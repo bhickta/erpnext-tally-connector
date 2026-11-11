@@ -25,10 +25,22 @@ MASTER_TYPES = (
 		"description": "Chart-of-accounts ledgers (includes groups)",
 	},
 	{
+		"key": "Unit",
+		"label": "Units of measure",
+		"tally_type": "Unit",
+		"description": "UOM masters; existing Tally units are skipped",
+	},
+	{
+		"key": "Item Group",
+		"label": "Item groups",
+		"tally_type": "Stock Group",
+		"description": "Stock group hierarchy",
+	},
+	{
 		"key": "Item",
 		"label": "Items",
 		"tally_type": "Stock Item",
-		"description": "Item, Item Group and UOM masters",
+		"description": "Stock Items only; sync Units and Item Groups first",
 	},
 	{
 		"key": "Warehouse",
