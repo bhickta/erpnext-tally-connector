@@ -1,8 +1,26 @@
+import re
 import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
+
+# TallyPrime accepts only letters and underscores in a Unit name. Names with
+# digits, spaces, hyphens, slashes or brackets are refused with
+# "BAD UNIT NAME"; verified against TallyPrime 1.1.7.1.
+UNIT_NAME_PATTERN = re.compile(r"[A-Za-z_]+")
+
+
+def unit_name_error(name):
+	"""Return why TallyPrime cannot accept this Unit name, or "" when it can."""
+	text = str(name or "").strip()
+	if not text:
+		return "the name is empty"
+	if not UNIT_NAME_PATTERN.fullmatch(text):
+		return (
+			"TallyPrime only accepts letters and underscores in a unit name"
+		)
+	return ""
 
 
 def _element(parent, tag, value=None, **attributes):

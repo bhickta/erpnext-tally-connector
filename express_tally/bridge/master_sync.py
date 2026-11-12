@@ -11,6 +11,7 @@ from .clients import BridgeRequestError
 from .collection_gateway import build_collection_export, parse_collection_export
 from .master_trace import MasterTrace
 from .normalization import master_name
+from .xml_gateway import unit_name_error
 
 LOGGER = logging.getLogger("erpnext_tally_bridge.master_sync")
 
@@ -462,7 +463,40 @@ class MasterSyncService:
 		return results, failed, was_cancelled
 
 	def _run_batch(self, parts, messages, batch_size, cancel_event, existing_names=None):
+		# TallyPrime answers "BAD UNIT NAME" for a unit it cannot name, and a
+		# rejected name can leave the import request unusable. Screen them out
+		# here so one unsupported ERPNext UOM cannot fail the whole batch.
+		rejected_names = []
+		if parts["key"] == "units" and messages:
+			accepted = []
+			for row in messages:
+				reason = unit_name_error(message_name(row))
+				if reason:
+					rejected_names.append((message_name(row), reason))
+				else:
+					accepted.append(row)
+			if rejected_names:
+				self._trace_write(
+					"unit_name_rejected",
+					batch_key=parts["key"],
+					count=len(rejected_names),
+					reason=rejected_names[0][1],
+					names=[name for name, _ in rejected_names][:200],
+				)
+			messages = accepted
 		if not messages:
+			if rejected_names:
+				sample = ", ".join(name for name, _ in rejected_names[:5])
+				return batch_result(
+					parts,
+					"Failed",
+					(
+						f"{len(rejected_names)} unit(s) cannot be created in TallyPrime"
+						f" because {rejected_names[0][1]}. Rename them in ERPNext, "
+						f"for example: {sample}"
+					)[:4000],
+					errors=len(rejected_names),
+				)
 			return batch_result(parts, "Success", "Nothing to sync")
 
 		created = altered = ignored = errors = requests = 0
@@ -552,6 +586,12 @@ class MasterSyncService:
 			if existing_names is not None:
 				existing_names.update(message_name(row) for row in chunk)
 
+		if rejected_names and status == "Success":
+			message = (
+				f"Skipped {len(rejected_names)} unit(s) whose names TallyPrime cannot "
+				f"accept ({rejected_names[0][1]}). First: "
+				+ ", ".join(name for name, _ in rejected_names[:5])
+			)[:4000]
 		if status == "Success":
 			LOGGER.info(
 				"Master batch %s complete: created=%s altered=%s ignored=%s errors=%s requests=%s",
