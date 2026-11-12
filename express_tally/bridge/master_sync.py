@@ -4,6 +4,7 @@ import json
 import logging
 import time
 from datetime import date
+from pathlib import Path
 
 from express_tally import __version__ as bridge_version
 
@@ -11,7 +12,7 @@ from .clients import BridgeRequestError
 from .collection_gateway import build_collection_export, parse_collection_export
 from .master_trace import MasterTrace
 from .normalization import master_name
-from .xml_gateway import unit_name_error
+from .xml_gateway import resolve_unit_names, unit_name_error
 
 LOGGER = logging.getLogger("erpnext_tally_bridge.master_sync")
 
@@ -70,6 +71,7 @@ MASTER_KEYS = tuple(master["key"] for master in MASTER_TYPES)
 
 SUMMARY_PATH = "/api/method/express_tally.integrations.master_sync_export.get_master_sync_summary"
 PAYLOAD_PATH = "/api/method/express_tally.integrations.master_sync_export.get_master_sync_payload"
+UNIT_ALIAS_FILE = "unit-aliases.json"
 
 # Keep individual JSONEx requests modest so Tally remains responsive on large
 # item/customer sets and a single failed request does not lose the whole run.
@@ -162,6 +164,59 @@ def message_name(message):
 	)
 
 
+def apply_unit_name_mapping(batches):
+	"""Rename UOMs TallyPrime cannot accept and keep the ERPNext original.
+
+	Tally only accepts letters and underscores in a Unit name, while ERPNext
+	UOMs such as "14 Pkg" or "Btu/Hour" use other characters. Each affected UOM
+	gets a stable Tally-safe name, and the original name is recorded as its
+	alias so the ERPNext identity is never lost.
+	"""
+	originals = []
+	for batch in batches:
+		key = batch.get("key")
+		messages = batch.get("tallymessage") or []
+		if key == "units":
+			originals.extend(message_name(message) for message in messages)
+		elif key == "items":
+			for message in messages:
+				if message.get("base units"):
+					originals.append(message["base units"])
+				for conversion in message.get("uoms") or ():
+					if isinstance(conversion, dict) and conversion.get("uom"):
+						originals.append(conversion["uom"])
+	mapping = {
+		original: mapped
+		for original, mapped in resolve_unit_names(originals).items()
+		if original != mapped
+	}
+	if not mapping:
+		return batches, {}
+
+	for batch in batches:
+		key = batch.get("key")
+		for message in batch.get("tallymessage") or []:
+			if key == "units":
+				original = message_name(message)
+				renamed = mapping.get(original)
+				if renamed:
+					message["name"] = renamed
+					metadata = message.setdefault("metadata", {})
+					metadata["name"] = renamed
+					metadata["unit_alias"] = original
+			elif key == "items":
+				base = str(message.get("base units") or "").strip()
+				if base in mapping:
+					message["base units"] = mapping[base]
+				for conversion in message.get("uoms") or ():
+					if not isinstance(conversion, dict):
+						continue
+					original = str(conversion.get("uom") or "").strip()
+					if original in mapping:
+						conversion["uom"] = mapping[original]
+	return batches, mapping
+
+
 def is_cancelled(cancel_event):
 	return bool(cancel_event and cancel_event.is_set())
 
@@ -221,6 +276,7 @@ class MasterSyncService:
 				duplicate_names=duplicate_policy,
 			)
 			batches = payload.get("batches") or []
+			batches, unit_aliases = apply_unit_name_mapping(batches)
 			trace.write(
 				"payload",
 				connector_version=payload.get("connector_version"),
@@ -238,6 +294,17 @@ class MasterSyncService:
 			)
 			if not batches:
 				raise BridgeRequestError("ERPNext returned no master batches")
+
+			if unit_aliases:
+				self._record_unit_aliases(unit_aliases)
+				trace.write(
+					"unit_name_mapped",
+					count=len(unit_aliases),
+					aliases=dict(list(unit_aliases.items())[:200]),
+				)
+				LOGGER.info(
+					"Renamed %s UOM(s) to Tally-safe unit names", len(unit_aliases)
+				)
 
 			LOGGER.info(
 				"Master sync started: masters=%s batch_size=%s batches=%s trace=%s",
@@ -319,6 +386,27 @@ class MasterSyncService:
 		if limit:
 			params["limit"] = int(limit)
 		return self.frappe.request("GET", PAYLOAD_PATH, params)
+
+	def _record_unit_aliases(self, aliases):
+		"""Persist the ERPNext UOM name for every renamed Tally unit."""
+		runtime = str(getattr(self.config, "runtime_directory", "") or "").strip()
+		if not runtime:
+			return
+		path = Path(runtime) / UNIT_ALIAS_FILE
+		existing = {}
+		try:
+			if path.is_file():
+				existing = json.loads(path.read_text(encoding="utf-8"))
+		except (OSError, ValueError):
+			existing = {}
+		existing.update(aliases)
+		try:
+			path.parent.mkdir(parents=True, exist_ok=True)
+			path.write_text(
+				json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8"
+			)
+		except OSError as exc:
+			LOGGER.warning("Could not save unit aliases: %s", exc)
 
 	def _existing_names(self, batch_key):
 		collection = EXISTING_MASTER_COLLECTIONS.get(batch_key)

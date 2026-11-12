@@ -1,3 +1,4 @@
+import hashlib
 import re
 import uuid
 import xml.etree.ElementTree as ET
@@ -9,6 +10,67 @@ from decimal import Decimal, ROUND_HALF_UP
 # digits, spaces, hyphens, slashes or brackets are refused with
 # "BAD UNIT NAME"; verified against TallyPrime 1.1.7.1.
 UNIT_NAME_PATTERN = re.compile(r"[A-Za-z_]+")
+
+_DIGIT_WORDS = (
+	"Zero",
+	"One",
+	"Two",
+	"Three",
+	"Four",
+	"Five",
+	"Six",
+	"Seven",
+	"Eight",
+	"Nine",
+)
+
+
+def tally_unit_name(name):
+	"""Translate an ERPNext UOM name into a name TallyPrime accepts.
+
+	Letters and underscores are kept, digits become words, and every other
+	character becomes an underscore. The ERPNext name is preserved separately
+	so it can be recorded as the alias.
+	"""
+	text = str(name or "").strip()
+	pieces = []
+	for character in text:
+		if character.isascii() and (character.isalpha() or character == "_"):
+			pieces.append(character)
+		elif character.isdigit():
+			pieces.append(_DIGIT_WORDS[int(character)])
+		else:
+			pieces.append("_")
+	candidate = re.sub(r"_+", "_", "".join(pieces)).strip("_")
+	if not candidate:
+		candidate = "Unit_" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:6]
+	return candidate
+
+
+def _alphabetic_suffix(value, length=4):
+	"""Return a short letters-only suffix, so the name stays Tally-safe."""
+	digest = hashlib.sha1(str(value).encode("utf-8")).hexdigest()[:length]
+	return "".join(chr(ord("A") + int(character, 16)) for character in digest)
+
+
+def resolve_unit_names(names):
+	"""Map every original UOM name to a unique Tally-safe Unit name."""
+	mapping = {}
+	used = {}
+	for original in dict.fromkeys(str(name or "").strip() for name in names):
+		candidate = tally_unit_name(original)
+		key = candidate.casefold()
+		if key in used:
+			suffix = _alphabetic_suffix(original)
+			candidate = f"{candidate}_{suffix}"
+			while candidate.casefold() in used:
+				suffix = _alphabetic_suffix(suffix + original)
+				candidate = f"{candidate.rsplit('_', 1)[0]}_{suffix}"
+			key = candidate.casefold()
+		used[key] = original
+		if original:
+			mapping[original] = candidate
+	return mapping
 
 
 def unit_name_error(name):
