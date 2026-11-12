@@ -1,7 +1,8 @@
-"""One-way ERPNext -> TallyPrime master synchronization."""
+﻿"""One-way ERPNext -> TallyPrime master synchronization."""
 
 import json
 import logging
+import re
 import time
 from datetime import date
 from pathlib import Path
@@ -164,6 +165,54 @@ def message_name(message):
 	)
 
 
+def _unsafe_numeric_text(value):
+	"""True for text Tally's JSON importer misreads as a number ("006- S.Oil").
+
+	Any value that starts with a zero followed by a digit is parsed as numeric
+	and rejected; the same text is fine when it does not look like a number.
+	"""
+	return bool(re.match(r"0\d", str(value or "").strip()))
+
+
+def sanitize_item_messages(batches):
+	"""Drop Stock Item values that Tally's JSON importer throws on.
+
+	TallyPrime reports exceptions=1 for a Stock Item carrying a leading-zero
+	number such as part number "000000". The value cannot be sent as text, so
+	it is dropped and reported instead of failing the whole item.
+	"""
+	dropped = []
+	for batch in batches:
+		if batch.get("key") != "items":
+			continue
+		for message in batch.get("tallymessage") or []:
+			name = message_name(message)
+			partno = message.get("partno")
+			if _unsafe_numeric_text(partno):
+				message.pop("partno", None)
+				dropped.append(f"{name}: partno {partno!r}")
+			groups = message.get("language name")
+			if isinstance(groups, list):
+				for group in groups:
+					if not isinstance(group, dict):
+						continue
+					names = group.get("name")
+					if not isinstance(names, list):
+						continue
+					kept = [
+						entry
+						for entry in names
+						if not (
+							isinstance(entry, str)
+							and _unsafe_numeric_text(entry)
+						)
+					]
+					if len(kept) != len(names):
+						dropped.append(f"{name}: alias {group.get('name')!r}")
+						group["name"] = kept
+	return batches, dropped
+
+
 def apply_unit_name_mapping(batches):
 	"""Rename UOMs TallyPrime cannot accept and keep the ERPNext original.
 
@@ -277,6 +326,7 @@ class MasterSyncService:
 			)
 			batches = payload.get("batches") or []
 			batches, unit_aliases = apply_unit_name_mapping(batches)
+			batches, dropped_item_values = sanitize_item_messages(batches)
 			trace.write(
 				"payload",
 				connector_version=payload.get("connector_version"),
@@ -304,6 +354,17 @@ class MasterSyncService:
 				)
 				LOGGER.info(
 					"Renamed %s UOM(s) to Tally-safe unit names", len(unit_aliases)
+				)
+
+			if dropped_item_values:
+				trace.write(
+					"item_value_dropped",
+					count=len(dropped_item_values),
+					values=dropped_item_values[:200],
+				)
+				LOGGER.warning(
+					"Dropped %s Stock Item value(s) Tally cannot read",
+					len(dropped_item_values),
 				)
 
 			LOGGER.info(
