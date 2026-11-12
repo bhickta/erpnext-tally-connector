@@ -469,6 +469,20 @@ class MasterSyncService:
 		except OSError as exc:
 			LOGGER.warning("Could not save unit aliases: %s", exc)
 
+	def _import_items_individually(self, chunk, rejected_items):
+		"""Import rejected item records one at a time, keeping the good ones."""
+		totals = {"created": 0, "altered": 0, "ignored": 0, "errors": 0}
+		for row in chunk:
+			result = self._import_chunk([row], "items")
+			if result.success:
+				totals["created"] += result.created
+				totals["altered"] += result.altered
+				totals["ignored"] += result.ignored
+			else:
+				totals["errors"] += 1
+				rejected_items.append(message_name(row))
+		return totals
+
 	def _existing_names(self, batch_key):
 		collection = EXISTING_MASTER_COLLECTIONS.get(batch_key)
 		if not collection:
@@ -651,6 +665,7 @@ class MasterSyncService:
 		created = altered = ignored = errors = requests = 0
 		status = "Success"
 		message = ""
+		rejected_items = []
 		offset = 0
 		while offset < len(messages):
 			if is_cancelled(cancel_event):
@@ -727,6 +742,23 @@ class MasterSyncService:
 			altered += imported.altered
 			ignored += imported.ignored
 			errors += imported.errors
+			if not imported.success and parts["key"] == "items" and len(chunk) > 1:
+				# Tally rejects an item it cannot read without naming it, which
+				# used to stop the whole run. Retry one at a time so the items
+				# Tally accepts still land.
+				salvaged = self._import_items_individually(chunk, rejected_items)
+				created += salvaged["created"]
+				altered += salvaged["altered"]
+				ignored += salvaged["ignored"]
+				errors += salvaged["errors"]
+				if rejected_items:
+					self._trace_write(
+						"item_rejected",
+						batch_key=parts["key"],
+						count=len(rejected_items),
+						names=rejected_items[:200],
+					)
+				continue
 			if not imported.success:
 				status = "Failed"
 				message = imported.message or f"{parts['label']} was rejected by Tally"
@@ -740,6 +772,11 @@ class MasterSyncService:
 				f"Skipped {len(rejected_names)} unit(s) whose names TallyPrime cannot "
 				f"accept ({rejected_names[0][1]}). First: "
 				+ ", ".join(name for name, _ in rejected_names[:5])
+			)[:4000]
+		if rejected_items and status == "Success":
+			message = (
+				f"{len(rejected_items)} item(s) were rejected by Tally and skipped. "
+				"First: " + ", ".join(rejected_items[:5])
 			)[:4000]
 		if status == "Success":
 			LOGGER.info(
