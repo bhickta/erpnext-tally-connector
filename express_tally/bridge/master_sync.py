@@ -1,5 +1,6 @@
 ﻿"""One-way ERPNext -> TallyPrime master synchronization."""
 
+import copy
 import json
 import logging
 import re
@@ -73,6 +74,8 @@ MASTER_KEYS = tuple(master["key"] for master in MASTER_TYPES)
 SUMMARY_PATH = "/api/method/express_tally.integrations.master_sync_export.get_master_sync_summary"
 PAYLOAD_PATH = "/api/method/express_tally.integrations.master_sync_export.get_master_sync_payload"
 UNIT_ALIAS_FILE = "unit-aliases.json"
+ITEM_ALIAS_FILE = "item-aliases.json"
+ITEM_RENAME_SUFFIXES = (" (2)", " (3)", " (4)")
 
 # Keep individual JSONEx requests modest so Tally remains responsive on large
 # item/customer sets and a single failed request does not lose the whole run.
@@ -174,6 +177,12 @@ def _unsafe_numeric_text(value):
 	return bool(re.match(r"0\d", str(value or "").strip()))
 
 
+def _unsafe_partno(value):
+	"""True for a part number TallyPrime rejects on a Stock Item import."""
+	text = str(value or "")
+	return _unsafe_numeric_text(text) or any(character.isspace() for character in text)
+
+
 def sanitize_item_messages(batches):
 	"""Drop Stock Item values that Tally's JSON importer throws on.
 
@@ -188,7 +197,7 @@ def sanitize_item_messages(batches):
 		for message in batch.get("tallymessage") or []:
 			name = message_name(message)
 			partno = message.get("partno")
-			if _unsafe_numeric_text(partno):
+			if _unsafe_partno(partno):
 				message.pop("partno", None)
 				dropped.append(f"{name}: partno {partno!r}")
 			groups = message.get("language name")
@@ -316,6 +325,7 @@ class MasterSyncService:
 			bridge_version=bridge_version,
 		)
 		self._trace = trace
+		self._item_alias_updates = {}
 		try:
 			payload = self._fetch_payload(
 				selected,
@@ -327,6 +337,9 @@ class MasterSyncService:
 			batches = payload.get("batches") or []
 			batches, unit_aliases = apply_unit_name_mapping(batches)
 			batches, dropped_item_values = sanitize_item_messages(batches)
+			self._apply_item_aliases(
+				batches, self._runtime_mapping(ITEM_ALIAS_FILE)
+			)
 			trace.write(
 				"payload",
 				connector_version=payload.get("connector_version"),
@@ -377,6 +390,15 @@ class MasterSyncService:
 			results, failed, was_cancelled = self._run_batches(
 				batches, batch_size, cancel_event
 			)
+			if self._item_alias_updates:
+				self._store_runtime_mapping(
+					ITEM_ALIAS_FILE, self._item_alias_updates
+				)
+				trace.write(
+					"item_name_mapped",
+					count=len(self._item_alias_updates),
+					aliases=dict(list(self._item_alias_updates.items())[:200]),
+				)
 			summary, summary_error = self._safe_summary()
 
 			result = {
@@ -470,7 +492,12 @@ class MasterSyncService:
 			LOGGER.warning("Could not save unit aliases: %s", exc)
 
 	def _import_items_individually(self, chunk, rejected_items):
-		"""Import rejected item records one at a time, keeping the good ones."""
+		"""Import rejected item records one at a time, keeping the good ones.
+
+		Tally's JSON importer refuses some item names outright without saying
+		why, while the same record is accepted under a suffixed name. Retry
+		with a suffix and keep the ERPNext name as the alias.
+		"""
 		totals = {"created": 0, "altered": 0, "ignored": 0, "errors": 0}
 		for row in chunk:
 			result = self._import_chunk([row], "items")
@@ -478,10 +505,79 @@ class MasterSyncService:
 				totals["created"] += result.created
 				totals["altered"] += result.altered
 				totals["ignored"] += result.ignored
-			else:
+				continue
+			original = message_name(row)
+			recovered = False
+			for suffix in ITEM_RENAME_SUFFIXES:
+				candidate = copy.deepcopy(row)
+				renamed = original + suffix
+				candidate["name"] = renamed
+				candidate.setdefault("metadata", {})["name"] = renamed
+				for group in candidate.get("language name") or ():
+					if isinstance(group, dict) and isinstance(group.get("name"), list):
+						group["name"] = [renamed, f"ERPNext:Item:{original}"]
+				retry = self._import_chunk([candidate], "items")
+				if retry.success:
+					self._item_alias_updates[original] = renamed
+					totals["created"] += retry.created
+					totals["altered"] += retry.altered
+					totals["ignored"] += retry.ignored
+					recovered = True
+					break
+			if not recovered:
 				totals["errors"] += 1
-				rejected_items.append(message_name(row))
+				rejected_items.append(original)
 		return totals
+
+	def _runtime_mapping(self, filename):
+		runtime = str(getattr(self.config, "runtime_directory", "") or "").strip()
+		if not runtime:
+			return {}
+		path = Path(runtime) / filename
+		try:
+			if path.is_file():
+				return json.loads(path.read_text(encoding="utf-8"))
+		except (OSError, ValueError):
+			return {}
+		return {}
+
+	def _runtime_mapping_path(self, filename):
+		runtime = str(getattr(self.config, "runtime_directory", "") or "").strip()
+		if not runtime:
+			return None
+		return Path(runtime) / filename
+
+	def _store_runtime_mapping(self, filename, updates):
+		path = self._runtime_mapping_path(filename)
+		if path is None or not updates:
+			return
+		existing = self._runtime_mapping(filename)
+		existing.update(updates)
+		try:
+			path.parent.mkdir(parents=True, exist_ok=True)
+			path.write_text(
+				json.dumps(existing, indent=2, sort_keys=True), encoding="utf-8"
+			)
+		except OSError as exc:
+			LOGGER.warning("Could not save %s: %s", filename, exc)
+
+	def _apply_item_aliases(self, batches, aliases):
+		"""Rename items previously mapped, and keep the ERPNext name as alias."""
+		if not aliases:
+			return
+		for batch in batches:
+			if batch.get("key") != "items":
+				continue
+			for message in batch.get("tallymessage") or []:
+				original = message_name(message)
+				renamed = aliases.get(original)
+				if not renamed:
+					continue
+				message["name"] = renamed
+				message.setdefault("metadata", {})["name"] = renamed
+				for group in message.get("language name") or ():
+					if isinstance(group, dict) and isinstance(group.get("name"), list):
+						group["name"] = [renamed, f"ERPNext:Item:{original}"]
 
 	def _existing_names(self, batch_key):
 		collection = EXISTING_MASTER_COLLECTIONS.get(batch_key)
