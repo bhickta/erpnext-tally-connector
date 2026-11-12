@@ -1,5 +1,8 @@
 name: Build Tally Bridge for Windows
 
+# Builds the standalone Windows bridge and Control Centre package used by the
+# Tally computer. Runs on every bridge/UI change and can be started manually.
+
 on:
   workflow_dispatch:
   push:
