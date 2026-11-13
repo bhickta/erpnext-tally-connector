@@ -218,7 +218,10 @@ def _ledger_message(
 		# dated "today" silently loses the address. Use the fiscal year start.
 		effective_from = posting_date or date.today().isoformat()
 		try:
-			fiscal_start = frappe.utils.get_fiscal_year(effective_from)[1]
+			# get_fiscal_year returns (start, end); the start is what Tally
+			# needs, because it ignores mailing details dated after its own
+			# current date.
+			fiscal_start = frappe.utils.get_fiscal_year(effective_from)[0]
 			if str(effective_from) > str(fiscal_start):
 				effective_from = fiscal_start
 		except Exception:
