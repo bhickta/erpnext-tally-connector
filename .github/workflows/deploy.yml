@@ -1,8 +1,9 @@
 name: Deploy Express Tally
 
+# Manual only. Pushing to master or production must never deploy on its own;
+# run this from Actions > Deploy Express Tally > Run workflow and pick the
+# branch (master deploys dev, production deploys production).
 on:
-  push:
-    branches: [master, production]
   workflow_dispatch:
 
 permissions:
