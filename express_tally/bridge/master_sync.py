@@ -76,6 +76,7 @@ PAYLOAD_PATH = "/api/method/express_tally.integrations.master_sync_export.get_ma
 UNIT_ALIAS_FILE = "unit-aliases.json"
 ITEM_ALIAS_FILE = "item-aliases.json"
 ITEM_RENAME_SUFFIXES = (" (2)", " (3)", " (4)")
+LEDGER_BATCH_KEYS = ("customers", "suppliers", "account_ledgers")
 
 # Keep individual JSONEx requests modest so Tally remains responsive on large
 # item/customer sets and a single failed request does not lose the whole run.
@@ -491,6 +492,20 @@ class MasterSyncService:
 		except OSError as exc:
 			LOGGER.warning("Could not save unit aliases: %s", exc)
 
+	def _import_ledgers_individually(self, chunk, rejected_ledgers):
+		"""Import rejected party/ledger records one at a time, keeping the good ones."""
+		totals = {"created": 0, "altered": 0, "ignored": 0, "errors": 0}
+		for row in chunk:
+			result = self._import_chunk([row], "ledger")
+			if result.success:
+				totals["created"] += result.created
+				totals["altered"] += result.altered
+				totals["ignored"] += result.ignored
+			else:
+				totals["errors"] += 1
+				rejected_ledgers.append(message_name(row))
+		return totals
+
 	def _import_items_individually(self, chunk, rejected_items):
 		"""Import rejected item records one at a time, keeping the good ones.
 
@@ -762,6 +777,7 @@ class MasterSyncService:
 		status = "Success"
 		message = ""
 		rejected_items = []
+		rejected_ledgers = []
 		offset = 0
 		while offset < len(messages):
 			if is_cancelled(cancel_event):
@@ -838,6 +854,27 @@ class MasterSyncService:
 			altered += imported.altered
 			ignored += imported.ignored
 			errors += imported.errors
+			if (
+				not imported.success
+				and len(chunk) > 1
+				and parts["key"] in LEDGER_BATCH_KEYS
+			):
+				# One rejected party used to abort the whole batch. Retry the
+				# records one at a time and keep the ones Tally accepts. Names
+				# are not changed: a renamed ledger would break its identity.
+				salvaged = self._import_ledgers_individually(chunk, rejected_ledgers)
+				created += salvaged["created"]
+				altered += salvaged["altered"]
+				ignored += salvaged["ignored"]
+				errors += salvaged["errors"]
+				if rejected_ledgers:
+					self._trace_write(
+						"ledger_rejected",
+						batch_key=parts["key"],
+						count=len(rejected_ledgers),
+						names=rejected_ledgers[:200],
+					)
+				continue
 			if not imported.success and parts["key"] == "items" and len(chunk) > 1:
 				# Tally rejects an item it cannot read without naming it, which
 				# used to stop the whole run. Retry one at a time so the items
@@ -873,6 +910,11 @@ class MasterSyncService:
 			message = (
 				f"{len(rejected_items)} item(s) were rejected by Tally and skipped. "
 				"First: " + ", ".join(rejected_items[:5])
+			)[:4000]
+		if rejected_ledgers and status == "Success":
+			message = (
+				f"{len(rejected_ledgers)} ledger(s) were rejected by Tally and skipped. "
+				"First: " + ", ".join(rejected_ledgers[:5])
 			)[:4000]
 		if status == "Success":
 			LOGGER.info(
