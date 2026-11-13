@@ -213,9 +213,19 @@ def _ledger_message(
 		),
 	}
 	if address_lines:
+		# TallyPrime ignores a mailing detail whose Applicable From is later
+		# than its current date (the start of the open period), so a payload
+		# dated "today" silently loses the address. Use the fiscal year start.
+		effective_from = posting_date or date.today().isoformat()
+		try:
+			fiscal_start = frappe.utils.get_fiscal_year(effective_from)[1]
+			if str(effective_from) > str(fiscal_start):
+				effective_from = fiscal_start
+		except Exception:
+			pass
 		fields["ledmailingdetails"] = [
 			{
-				"applicablefrom": str(posting_date or date.today().isoformat()).replace("-", ""),
+				"applicablefrom": str(effective_from).replace("-", ""),
 				"mailingname": name,
 				"address": _string_list(address_lines),
 				"pincode": pincode,
