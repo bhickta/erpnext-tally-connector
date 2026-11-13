@@ -8,6 +8,10 @@ on:
   push:
     branches:
       - master
+    tags:
+      # Pushing a tag like tally-control-centre-2026.11.13 publishes a stable
+      # release. Path filters do not apply to tag pushes.
+      - "tally-control-centre-*"
     paths:
       - ".github/workflows/build-tally-bridge-windows.yml"
       - "express_tally/bridge/**"
@@ -62,8 +66,25 @@ jobs:
             dist/ERPNext-Tally-Control-Centre-Windows-x64.zip.sha256
           if-no-files-found: error
 
+      - name: Publish versioned release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Tally Control Centre ${{ github.ref_name }}
+          body: |
+            Standalone Windows x64 Tally Control Centre built from commit ${{ github.sha }}.
+            Python is not required on the Tally computer.
+          prerelease: false
+          make_latest: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          files: |
+            dist/ERPNext-Tally-Control-Centre-Windows-x64.zip
+            dist/ERPNext-Tally-Control-Centre-Windows-x64.zip.sha256
+
       - name: Update rolling GitHub prerelease
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && github.ref_type == 'branch'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: tally-bridge-latest
