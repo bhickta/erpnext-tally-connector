@@ -357,6 +357,20 @@ def _voucher_attributes(order, target_id):
 	return attributes, remote_id
 
 
+def build_stock_journal_import(order, company, target_id):
+	"""Build a Tally Stock Journal for one ERPNext Stock Entry.
+
+	Deliberately unimplemented: a Stock Journal carries godown movements, and
+	posting a wrong quantity or godown corrupts stock in Tally. This needs a
+	live validation pass (blank company, one Material Issue / Receipt /
+	Transfer) before it is allowed to write anything.
+	"""
+	raise NotImplementedError(
+		"Stock Journal import is not validated yet; do not enable Stock Entry "
+		"pushes until it has been tested against a live Tally company"
+	)
+
+
 def build_voucher_import(order, company, target_id):
 	root, message = _import_envelope("Vouchers", company)
 	attributes, remote_id = _voucher_attributes(order, target_id)
