@@ -81,7 +81,7 @@ SUMMARY_PATH = "/api/method/express_tally.integrations.master_sync_export.get_ma
 PAYLOAD_PATH = "/api/method/express_tally.integrations.master_sync_export.get_master_sync_payload"
 UNIT_ALIAS_FILE = "unit-aliases.json"
 ITEM_ALIAS_FILE = "item-aliases.json"
-ITEM_RENAME_SUFFIXES = (" (2)", " (3)", " (4)")
+ITEM_RENAME_SUFFIXES = (" (2)",)
 LEDGER_BATCH_KEYS = ("customers", "suppliers", "account_ledgers")
 PARTY_GROUP_DOCTYPES = {
 	"Customer": ("Customer Group", "parent_customer_group"),
