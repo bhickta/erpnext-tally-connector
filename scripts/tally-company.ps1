@@ -148,14 +148,12 @@ switch ($Action) {
 	'load' {
 		if ($window -eq [IntPtr]::Zero) { Write-Output "tally not running"; exit 1 }
 		[TallyUI]::Focus($window); Start-Sleep -Milliseconds 500
-		Send-Special 114
-		Start-Sleep -Milliseconds 800
-		[TallyUI]::Click($CreateCompanyX, $SelectCompanyY)
-		Start-Sleep -Milliseconds 1200
-		[TallyUI]::Type($window, $Name)
-		Start-Sleep -Milliseconds 700
-		Send-Special 13
-		Start-Sleep -Milliseconds 2000
+		Send-Special 114                # F3 opens the company panel
+		Start-Sleep -Milliseconds 1000
+		[TallyUI]::Type($window, $Name)  # filters the company list
+		Start-Sleep -Milliseconds 900
+		Send-Special 13                  # select the highlighted company
+		Start-Sleep -Milliseconds 2500
 		if ($Out -ne "") { Save-Shot $Out }
 	}
 }
