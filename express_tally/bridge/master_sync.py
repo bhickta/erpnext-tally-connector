@@ -67,6 +67,12 @@ MASTER_TYPES = (
 		"tally_type": "Ledger",
 		"description": "Suppliers as Sundry Creditors ledgers",
 	},
+	{
+		"key": "Party Group",
+		"label": "Customer/Supplier groups",
+		"tally_type": "Group",
+		"description": "Party groups as Tally groups; sync these before customers and suppliers",
+	},
 )
 
 MASTER_KEYS = tuple(master["key"] for master in MASTER_TYPES)
@@ -77,6 +83,15 @@ UNIT_ALIAS_FILE = "unit-aliases.json"
 ITEM_ALIAS_FILE = "item-aliases.json"
 ITEM_RENAME_SUFFIXES = (" (2)", " (3)", " (4)")
 LEDGER_BATCH_KEYS = ("customers", "suppliers", "account_ledgers")
+PARTY_GROUP_DOCTYPES = {
+	"Customer": ("Customer Group", "parent_customer_group"),
+	"Supplier": ("Supplier Group", "parent_supplier_group"),
+}
+PARTY_GROUP_FIELD = {"Customer": "customer_group", "Supplier": "supplier_group"}
+PARTY_DEFAULT_PARENT = {
+	"Customer": "Sundry Debtors",
+	"Supplier": "Sundry Creditors",
+}
 
 # Keep individual JSONEx requests modest so Tally remains responsive on large
 # item/customer sets and a single failed request does not lose the whole run.
@@ -355,13 +370,21 @@ class MasterSyncService:
 		self._item_alias_updates = {}
 		try:
 			payload = self._fetch_payload(
-				selected,
+				[m for m in selected if m != "Party Group"],
 				include_disabled=include_disabled,
 				include_opening_balances=include_opening_balances,
 				limit=limit,
 				duplicate_names=duplicate_policy,
-			)
+			) if any(m != "Party Group" for m in selected) else {"batches": []}
 			batches = payload.get("batches") or []
+			if "Party Group" in selected:
+				batches = [
+					{
+						"key": "party_groups",
+						"label": "Customer/Supplier groups",
+						"tallymessage": self._party_group_messages(),
+					}
+				] + batches
 			batches, unit_aliases = apply_unit_name_mapping(batches)
 			books_from = self._books_from()
 			clamped = clamp_mailing_details(batches, books_from)
@@ -372,6 +395,9 @@ class MasterSyncService:
 					books_from=books_from,
 				)
 			batches, dropped_item_values = sanitize_item_messages(batches)
+			party_groups_applied = self._apply_party_groups(batches)
+			if party_groups_applied:
+				trace.write("party_groups_applied", count=party_groups_applied)
 			self._apply_item_aliases(
 				batches, self._runtime_mapping(ITEM_ALIAS_FILE)
 			)
@@ -647,6 +673,93 @@ class MasterSyncService:
 		except Exception as exc:
 			LOGGER.warning("Could not read the Tally books start date: %s", exc)
 		return "20000401"
+
+	def _erpnext_rows(self, doctype, fields, limit=5000):
+		return (
+			self.frappe.request(
+				"GET",
+				"/api/method/frappe.client.get_list",
+				{
+					"doctype": doctype,
+					"fields": json.dumps(fields),
+					"limit_page_length": limit,
+				},
+			)
+			or []
+		)
+
+	def _party_group_messages(self):
+		"""Mirror the ERPNext party group tree as Tally account groups."""
+		messages = []
+		for party_doctype, (group_doctype, parent_field) in PARTY_GROUP_DOCTYPES.items():
+			rows = self._erpnext_rows(group_doctype, ["name", parent_field])
+			parents = {
+				row["name"]: str(row.get(parent_field) or "").strip() for row in rows
+			}
+			base = PARTY_DEFAULT_PARENT[party_doctype]
+
+			def depth(name, seen=()):
+				parent = parents.get(name, "")
+				if not parent or parent not in parents or parent in seen:
+					return 0
+				return 1 + depth(parent, seen + (name,))
+
+			for name in sorted(parents, key=lambda value: (depth(value), value)):
+				if name.startswith("All "):
+					continue
+				parent = parents.get(name) or ""
+				if not parent or parent not in parents or parent.startswith("All "):
+					parent = base
+				messages.append(
+					{
+						"metadata": {"type": "Group", "action": "create", "name": name},
+						"name": name,
+						"parent": parent,
+					}
+				)
+		return messages
+
+	def _apply_party_groups(self, batches):
+		"""Place each party under its ERPNext group when Tally has that group."""
+		if not hasattr(self, "_tally_group_names"):
+			names = set()
+			try:
+				request = build_collection_export(
+					self.config.tally_company, "ETGroupNames", "Group", ("Name",)
+				)
+				rows = parse_collection_export(
+					self.tally.export_collection(request), ("GROUP",), raise_on_error=False
+				)
+				names = {master_name(row) for row in rows if master_name(row)}
+			except Exception as exc:
+				LOGGER.warning("Could not read Tally groups: %s", exc)
+			self._tally_group_names = names
+		groups = self._tally_group_names
+		if not groups:
+			return 0
+
+		assignments = {}
+		for party_doctype, field in PARTY_GROUP_FIELD.items():
+			try:
+				rows = self._erpnext_rows(party_doctype, ["name", field])
+			except Exception as exc:
+				LOGGER.warning("Could not read %s groups: %s", party_doctype, exc)
+				continue
+			for row in rows:
+				group = str(row.get(field) or "").strip()
+				if group:
+					assignments[row["name"]] = group
+
+		applied = 0
+		for batch in batches:
+			if batch.get("key") not in ("customers", "suppliers"):
+				continue
+			for message in batch.get("tallymessage") or []:
+				group = assignments.get(message_name(message))
+				if group and group in groups:
+					message["parent"] = group
+					applied += 1
+		return applied
 
 	def _existing_names(self, batch_key):
 		collection = EXISTING_MASTER_COLLECTIONS.get(batch_key)
