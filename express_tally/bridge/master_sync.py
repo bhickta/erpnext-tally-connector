@@ -223,6 +223,32 @@ def sanitize_item_messages(batches):
 	return batches, dropped
 
 
+def clamp_mailing_details(batches, books_from):
+	"""Date mailing details on or before the Tally company's books start.
+
+	TallyPrime ignores a LEDMAILINGDETAILS entry whose Applicable From is later
+	than its current date, which is the start of the open period. A payload
+	dated today therefore loses the whole address block silently.
+	"""
+	books_from = str(books_from or "").strip()
+	if not books_from:
+		return 0
+	changed = 0
+	for batch in batches:
+		if batch.get("key") not in ("customers", "suppliers"):
+			continue
+		for message in batch.get("tallymessage") or []:
+			for detail in message.get("ledmailingdetails") or ():
+				if not isinstance(detail, dict):
+					continue
+				current = str(detail.get("applicablefrom") or "").strip()
+				if current and current <= books_from:
+					continue
+				detail["applicablefrom"] = books_from
+				changed += 1
+	return changed
+
+
 def apply_unit_name_mapping(batches):
 	"""Rename UOMs TallyPrime cannot accept and keep the ERPNext original.
 
@@ -337,6 +363,14 @@ class MasterSyncService:
 			)
 			batches = payload.get("batches") or []
 			batches, unit_aliases = apply_unit_name_mapping(batches)
+			books_from = self._books_from()
+			clamped = clamp_mailing_details(batches, books_from)
+			if clamped:
+				trace.write(
+					"mailing_details_clamped",
+					count=clamped,
+					books_from=books_from,
+				)
 			batches, dropped_item_values = sanitize_item_messages(batches)
 			self._apply_item_aliases(
 				batches, self._runtime_mapping(ITEM_ALIAS_FILE)
@@ -593,6 +627,26 @@ class MasterSyncService:
 				for group in message.get("language name") or ():
 					if isinstance(group, dict) and isinstance(group.get("name"), list):
 						group["name"] = [renamed, f"ERPNext:Item:{original}"]
+
+	def _books_from(self):
+		"""Return the Tally company's books-start date as yyyymmdd."""
+		try:
+			request = build_collection_export(
+				self.config.tally_company,
+				"ETCompanyBooksFrom",
+				"Company",
+				("Name", "StartingFrom"),
+			)
+			records = parse_collection_export(
+				self.tally.export_collection(request), ("COMPANY",), raise_on_error=False
+			)
+			for record in records:
+				value = str(record.get("startingfrom") or "").strip()
+				if value:
+					return value.replace("-", "")[:8]
+		except Exception as exc:
+			LOGGER.warning("Could not read the Tally books start date: %s", exc)
+		return "20000401"
 
 	def _existing_names(self, batch_key):
 		collection = EXISTING_MASTER_COLLECTIONS.get(batch_key)
