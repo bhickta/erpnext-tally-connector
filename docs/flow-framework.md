@@ -99,6 +99,56 @@ references, ledgers, parties, lines, taxes, or eligibility differ. Override
 own pending-version selection, sync logging, payload hashing, agent transport,
 master ordering, and Tally import/response handling.
 
+The sales-document flow keeps its existing voucher types and IDs. It uses the
+accounting voucher layout for non-invoice sales documents and the item invoice
+layout for sales invoices. For vouchers with stock lines, enable **Inventory
+values are affected** on the configured Tally sales ledger. The bridge enables
+this when it creates the ledger and asks the operator to review the setting on
+existing ledgers. [Tally XML samples](https://help.tallysolutions.com/sample-xml/)
+show both voucher layouts.
+
+The bridge looks up each stock voucher through an inline Tally collection and
+checks the stored item names, quantities and godowns before acknowledging it.
+If a write is accepted and readback fails, the rest of the batch stays pending.
+A retry checks the existing voucher and source version before creating any
+masters or sending another voucher. Reconcile older or incomplete vouchers in
+Tally before retrying them.
+
+On the Tally computer, the bridge can inspect a previously imported voucher
+using its configured Tally endpoint and company. Use the number shown in Tally,
+since Tally may assign a different number at import.
+
+```text
+python -m express_tally.bridge --config tally-bridge.json inspect-voucher --number DN-FULL --date 2026-07-01
+```
+
+The command returns the voucher's master ID and stored stock lines. If more
+than one voucher matches, add `--voucher-type` with the type shown in Tally.
+This command uses collection export and works independently of the named
+report exports. If the collection request itself fails, the command reports
+the error.
+
+Payment, Receipt, Contra, and Journal profiles verify the saved posting date,
+ledger entries, amounts, and bill allocations. Cancellation is acknowledged
+after Tally returns the voucher as cancelled. Ledger opening sync also reads
+back the ledger name, group, bill-wise setting, and opening balance.
+
+Inbound collection errors stop the batch and leave its checkpoint available
+for retry. Acknowledgements use the Tally source identity when ERPNext returns
+it. An accepted item above a pending older version is recorded separately
+until the gap closes. Date and voucher-type filters keep separate voucher
+checkpoints. A newly separated scope starts with no checkpoint and may read
+records already seen by the older scope.
+
+The standalone Stock Entry poller uses a cursor scoped to the ERPNext company
+and destination target ID. It compares Stock Journal source and destination
+movements before acknowledging and stops at the first failed entry. Update
+the server app and standalone poller together because the feed now requires
+company and target parameters. On the first scan after upgrade, the poller may
+encounter older journals without a matching version marker. Review those
+journals before resuming the feed. Delivery Notes use the registered sales
+flow.
+
 ## Context
 
 Every operation receives a `FlowContext` containing:

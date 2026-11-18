@@ -113,7 +113,7 @@ class ControlCentre:
 		config = self.config()
 		config.validate()
 		target = f"{config.target_id}:{config.tally_company}"
-		removed = CheckpointStore(config.runtime_directory).reset(target)
+		removed = CheckpointStore(config.runtime_directory).reset(target, include_scopes=True)
 		return {"reset": removed, "target": target}
 
 	def make_service(self, require_flows=True):

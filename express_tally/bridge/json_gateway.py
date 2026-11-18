@@ -4,6 +4,8 @@ import uuid
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 
+from .xml_gateway import stock_item_name
+
 
 def _amount(value):
 	return str(Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
@@ -67,13 +69,13 @@ def _godown(name):
 	}
 
 
-def _ledger(name, parent, billwise=False, gstin="", country=""):
+def _ledger(name, parent, billwise=False, gstin="", country="", *, affects_stock=False):
 	ledger = {
 		"metadata": _metadata("Ledger", name),
 		"name": name,
 		"parent": parent,
 		"isbillwiseon": bool(billwise),
-		"affectsstock": False,
+		"affectsstock": affects_stock,
 	}
 	if country:
 		ledger["countryofresidence"] = country
@@ -83,7 +85,7 @@ def _ledger(name, parent, billwise=False, gstin="", country=""):
 
 
 def _stock_item(item):
-	tally_name = item.get("tally_name") or item.get("item_name") or item["item_code"]
+	tally_name = stock_item_name(item)
 	names = [{"metadata": True, "type": "String"}, tally_name]
 	for alias in (item["item_code"], f"ERPNext:Item:{item['item_code']}"):
 		if alias and alias.casefold() != tally_name.casefold() and alias not in names:
@@ -102,7 +104,7 @@ def _stock_item(item):
 	return stock_item
 
 
-def build_master_imports(document, company):
+def build_master_imports(document, company, *, sales_ledger_exists=False):
 	"""Return dependency-ordered native JSONEx master requests."""
 	units = [_unit(name) for name in document["masters"]["units"]]
 	general = [_stock_group(group) for group in document["masters"]["item_groups"]]
@@ -117,7 +119,10 @@ def build_master_imports(document, company):
 			country=customer.get("country") or "",
 		)
 	)
-	general.append(_ledger(document["sales_ledger"], "Sales Accounts"))
+	if not sales_ledger_exists:
+		general.append(
+			_ledger(document["sales_ledger"], "Sales Accounts", affects_stock=bool(document["items"]))
+		)
 	general.extend(_ledger(tax["ledger"], "Duties & Taxes") for tax in document["taxes"])
 	if document.get("rounding_adjustment"):
 		general.append(_ledger(document["round_off_ledger"], "Indirect Expenses"))
@@ -216,7 +221,7 @@ def build_voucher_import(document, company, target_id):
 			batch["godownname"] = item["warehouse"]
 		voucher["allinventoryentries"].append(
 			{
-				"stockitemname": item.get("tally_name") or item.get("item_name") or item["item_code"],
+				"stockitemname": stock_item_name(item),
 				"isdeemedpositive": False,
 				"rate": f"{_amount(item['rate'])}/{item['stock_uom']}",
 				"amount": _amount(item["amount"]),
@@ -250,32 +255,40 @@ class ImportResult:
 	errors: int = 0
 	last_voucher_id: str = ""
 	message: str = ""
+	combined: int = 0
 
 
 def parse_import_response(payload, require_change=False, allow_ignored=False):
-	result = payload.get("data", {}).get("import_result", {})
-	created = int(result.get("created") or 0)
-	altered = int(result.get("altered") or 0)
-	ignored = int(result.get("ignored") or 0)
-	errors = int(result.get("errors") or 0)
-	exceptions = int(result.get("exceptions") or 0)
-	cancelled = int(result.get("cancelled") or 0)
-	changed = created + altered + int(result.get("combined") or 0) + cancelled
-	accepted = changed > 0 or (allow_ignored and ignored > 0)
+	if not isinstance(payload, dict):
+		return ImportResult(False, message="Tally returned no import result")
+	data = payload.get("data")
+	result = data.get("import_result") if isinstance(data, dict) else None
+	fields = ("created", "altered", "ignored", "errors", "exceptions", "combined", "cancelled")
+	if not isinstance(result, dict) or not set(fields).intersection(result):
+		return ImportResult(False, message=str(payload.get("error") or data or "Tally returned no import result"))
+	try:
+		created, altered, ignored, errors, exceptions, combined, cancelled = (
+			int(result.get(field) or 0) for field in fields
+		)
+	except (ValueError, TypeError):
+		return ImportResult(False, message="Tally returned an invalid import count")
+	if min(created, altered, ignored, errors, exceptions, combined, cancelled) < 0:
+		return ImportResult(False, message="Tally returned a negative import count")
+	accepted = bool(created + altered + combined + cancelled or (allow_ignored and ignored))
 	messages = result.get("line_errors") or result.get("lineerror") or payload.get("error") or ""
 	if isinstance(messages, list):
 		messages = "; ".join(str(message) for message in messages)
 	if not messages and (errors or exceptions):
 		messages = f"Tally reported errors={errors}, exceptions={exceptions}"
 	success = (
-		str(payload.get("status", "1")) != "0"
+		str(payload.get("status", "1")) == "1"
 		and errors == 0
 		and exceptions == 0
 		and not messages
 		and (not require_change or accepted)
 	)
-	if require_change and not accepted and not messages:
-		messages = f"Tally did not create or alter the voucher (ignored={ignored})"
+	if not success and not messages:
+		messages = f"Tally did not accept the import (ignored={ignored})"
 	return ImportResult(
 		success=success,
 		created=created,
@@ -284,4 +297,5 @@ def parse_import_response(payload, require_change=False, allow_ignored=False):
 		errors=errors,
 		last_voucher_id=str(result.get("lastvchid") or ""),
 		message=str(messages),
+		combined=combined,
 	)

@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import Mock
 
-from express_tally.bridge.clients import FrappeClient
+from express_tally.bridge.clients import BridgeRequestError, FrappeClient
 from express_tally.bridge.collection_gateway import build_collection_export, parse_collection_export
 from express_tally.bridge.config import SECRET_MASK, BridgeConfig, ConfigStore
 from express_tally.bridge.controller import ControlCentre, validate_exclusive_flows
@@ -28,6 +28,8 @@ from express_tally.bridge.inbound_profiles import (
 )
 from express_tally.bridge.profiles import AgentProfile, AgentProfileRegistry, InventorySalesVoucherProfile
 from express_tally.bridge.service import SyncService, SyncSummary
+from express_tally.bridge.voucher_readback import inspect_voucher
+from express_tally.bridge.xml_gateway import voucher_remote_id
 from express_tally.bridge.xml_gateway import ImportResult as XMLImportResult
 from express_tally.bridge.xml_gateway import build_voucher_import as build_xml_voucher_import
 
@@ -72,6 +74,36 @@ def sample_order():
 			"warehouses": ["Stores"],
 		},
 	}
+
+
+def collection_response(content=""):
+	return f"<ENVELOPE><HEADER><STATUS>1</STATUS></HEADER><BODY><DATA><COLLECTION>{content}</COLLECTION></DATA></BODY></ENVELOPE>"
+
+
+def saved_voucher(document, *, master_id="42", date="20260828", stock=True):
+	guid = voucher_remote_id(document, "target-1")
+	inventory = """
+	<LEDGERENTRIES.LIST><LEDGERNAME>Sales</LEDGERNAME>
+	<INVENTORYALLOCATIONS.LIST><STOCKITEMNAME>Item One</STOCKITEMNAME>
+	<ACTUALQTY> 2.000 Nos</ACTUALQTY><BILLEDQTY> 2 Nos</BILLEDQTY>
+	<BATCHALLOCATIONS.LIST><GODOWNNAME>Stores</GODOWNNAME>
+	<ACTUALQTY>2 Nos</ACTUALQTY><BILLEDQTY>2 Nos</BILLEDQTY></BATCHALLOCATIONS.LIST>
+	</INVENTORYALLOCATIONS.LIST></LEDGERENTRIES.LIST>
+	""" if stock else ""
+	return collection_response(f"""
+	<VOUCHER><MASTERID>{master_id}</MASTERID><GUID>{guid}</GUID>
+	<VOUCHERNUMBER>{document['name']}</VOUCHERNUMBER><DATE>{date}</DATE>
+	<VOUCHERTYPENAME>Sales</VOUCHERTYPENAME><ISCANCELLED>No</ISCANCELLED><ISOPTIONAL>No</ISOPTIONAL>
+	<NARRATION>Test order\n[ExpressTallyVersion:hash-1]</NARRATION>
+	{inventory}</VOUCHER>
+	""")
+
+
+def master_readbacks():
+	return [
+		collection_response("<LEDGER NAME='Sales'><AFFECTSSTOCK>Yes</AFFECTSSTOCK></LEDGER>"),
+		collection_response("<UNIT NAME='Nos'/>"),
+	]
 
 
 class TestTallyJSONGateway(TestCase):
@@ -168,6 +200,13 @@ class TestTallyXMLVoucherGateway(TestCase):
 		self.assertEqual(so_voucher.findtext("ISORDER"), "No")
 		self.assertEqual(dn_voucher.findtext("ISORDER"), "No")
 		self.assertEqual(so_voucher.findtext("PERSISTEDVIEW"), "Accounting Voucher View")
+		self.assertEqual(dn_voucher.attrib["OBJVIEW"], "Accounting Voucher View")
+		self.assertEqual(dn_voucher.findtext("OBJVIEW"), "Accounting Voucher View")
+		self.assertIsNone(dn_voucher.find("ALLINVENTORYENTRIES.LIST"))
+		self.assertEqual(
+			dn_voucher.findtext("LEDGERENTRIES.LIST[LEDGERNAME='Sales']/INVENTORYALLOCATIONS.LIST/STOCKITEMNAME"),
+			"Item One",
+		)
 		self.assertEqual(dn_voucher.findtext("ISINVOICE"), "No")
 		self.assertNotEqual(so_voucher.attrib["REMOTEID"], dn_voucher.attrib["REMOTEID"])
 
@@ -209,6 +248,12 @@ class TestTallyXMLVoucherGateway(TestCase):
 		self.assertEqual(voucher.attrib["VCHTYPE"], "Credit Note")
 		self.assertEqual(voucher.findtext("VOUCHERTYPENAME"), "Credit Note")
 		self.assertEqual(voucher.findtext("ISINVOICE"), "Yes")
+		self.assertEqual(voucher.attrib["OBJVIEW"], "Invoice Voucher View")
+		self.assertEqual(voucher.findtext("PERSISTEDVIEW"), "Invoice Voucher View")
+		self.assertIsNone(voucher.find("LEDGERENTRIES.LIST[LEDGERNAME='Sales']"))
+		allocation = voucher.find("ALLINVENTORYENTRIES.LIST/ACCOUNTINGALLOCATIONS.LIST")
+		self.assertEqual(allocation.findtext("AMOUNT"), "-250.00")
+		self.assertEqual(allocation.findtext("ISDEEMEDPOSITIVE"), "Yes")
 		self.assertEqual(voucher.findtext("LEDGERENTRIES.LIST/ISDEEMEDPOSITIVE"), "No")
 		self.assertIn(
 			"[ExpressTallyOrigin:raplbaddi.sales_invoices_to_tally]",
@@ -232,6 +277,8 @@ class TestTallyXMLVoucherGateway(TestCase):
 		config = BridgeConfig(target_id="target-1", tally_company="Test Company")
 		tally = Mock()
 		tally.import_xml.return_value = XMLImportResult(success=True, altered=1, last_voucher_id="42")
+		active = saved_voucher(document)
+		tally.export_collection.side_effect = [active, active.replace("<ISCANCELLED>No", "<ISCANCELLED>Yes")]
 
 		target = InventorySalesVoucherProfile().deliver(document, config, tally)
 
@@ -242,17 +289,75 @@ class TestTallyXMLVoucherGateway(TestCase):
 		self.assertEqual(voucher.attrib["TAGNAME"], "MASTER ID")
 		self.assertEqual(voucher.attrib["TAGVALUE"], "42")
 
-	def test_ignored_retry_returns_deterministic_guid_reference(self):
+	def test_retry_reads_existing_voucher_without_reposting(self):
 		document = sample_order()
 		config = BridgeConfig(target_id="target-1", tally_company="Test Company")
 		tally = Mock()
-		tally.import_json.return_value = XMLImportResult(success=True, altered=1)
-		tally.import_xml.return_value = XMLImportResult(success=True, ignored=1)
+		tally.export_collection.return_value = saved_voucher(document)
 
-		target = InventorySalesVoucherProfile().deliver(document, config, tally)
+		self.assertEqual(InventorySalesVoucherProfile().deliver(document, config, tally), "42")
+		tally.import_xml.assert_not_called()
+		tally.import_json.assert_not_called()
 
-		self.assertTrue(target.startswith("guid:"))
+	def test_unknown_request_stops_before_any_writes(self):
+		document = sample_order()
+		config = BridgeConfig(target_id="target-1", tally_company="Test Company")
+		tally = Mock()
+		tally.export_collection.return_value = "<RESPONSE>Unknown Request</RESPONSE>"
 
+		with self.assertRaisesRegex(BridgeRequestError, "before import.*Unknown Request"):
+			InventorySalesVoucherProfile().deliver(document, config, tally)
+		tally.import_xml.assert_not_called()
+		tally.import_json.assert_not_called()
+
+	def test_existing_sales_ledger_with_inventory_disabled_blocks_import(self):
+		document = sample_order()
+		config = BridgeConfig(target_id="target-1", tally_company="Test Company")
+		tally = Mock()
+		tally.export_collection.side_effect = [
+			collection_response(),
+			collection_response("<LEDGER NAME='Sales'><AFFECTSSTOCK>No</AFFECTSSTOCK></LEDGER>"),
+		]
+
+		with self.assertRaisesRegex(BridgeRequestError, "Enable Inventory values are affected"):
+			InventorySalesVoucherProfile().deliver(document, config, tally)
+		tally.import_xml.assert_not_called()
+		tally.import_json.assert_not_called()
+
+	def test_new_sales_ledger_and_units_use_inventory_safe_master_requests(self):
+		document = sample_order()
+		config = BridgeConfig(target_id="target-1", tally_company="Test Company")
+		tally = Mock()
+		tally.export_collection.side_effect = [
+			collection_response(), collection_response(), collection_response(),
+			master_readbacks()[0], saved_voucher(document),
+		]
+		tally.import_xml.return_value = tally.import_json.return_value = XMLImportResult(success=True)
+
+		self.assertEqual(InventorySalesVoucherProfile().deliver(document, config, tally), "42")
+
+		unit_request = ET.fromstring(tally.import_xml.call_args_list[0].args[0])
+		self.assertEqual(unit_request.findtext(".//REPORTNAME"), "All Masters")
+		self.assertEqual(unit_request.findtext(".//UNIT/NAME"), "Nos")
+		general = tally.import_json.call_args_list[0].args[0]["tallymessage"]
+		ledgers = {row["name"]: row["affectsstock"] for row in general if row["metadata"]["type"] == "Ledger"}
+		self.assertEqual(ledgers, {"Customer One": False, "Sales": True, "Output IGST": False})
+
+	def test_inspection_reads_stock_allocations_by_number_and_date(self):
+		document = dict(sample_order(), name="DN-FULL")
+		tally = Mock()
+		tally.export_collection.return_value = saved_voucher(document, date="20260701")
+
+		result = inspect_voucher(tally, "Test Company", "DN-FULL", "2026-07-01", "Sales")
+
+		request = ET.fromstring(tally.export_collection.call_args.args[0])
+		self.assertEqual(request.findtext("./HEADER/TYPE"), "Collection")
+		self.assertEqual(request.findtext(".//SVFROMDATE"), "20260701")
+		self.assertEqual(result["master_id"], "42")
+		self.assertEqual(result["stock_lines"], [{
+			"item": "Item One", "actual_quantity": "2.000 Nos", "billed_quantity": "2 Nos",
+			"godowns": ["Stores"],
+		}])
 
 class TestTallyCollectionGateway(TestCase):
 	def test_collection_parser_removes_invalid_tally_control_references(self):
@@ -511,6 +616,9 @@ class TestSyncService(TestCase):
 		tally_client.get_current_company.return_value = "Tally Company"
 		tally_client.get_logical_function.return_value = True
 		tally_client.import_json.return_value = XMLImportResult(success=True, altered=1)
+		tally_client.export_collection.side_effect = [
+			collection_response(), *master_readbacks(), saved_voucher(sample_order()),
+		]
 		tally_client.import_xml.return_value = XMLImportResult(
 			success=True, created=1, last_voucher_id="42"
 		)
@@ -519,11 +627,36 @@ class TestSyncService(TestCase):
 		result = service.sync_once()
 
 		self.assertEqual(result.succeeded, 1)
-		self.assertEqual(tally_client.import_json.call_count, 3)
+		self.assertEqual(tally_client.import_json.call_count, 2)
 		tally_client.import_xml.assert_called_once()
 		acknowledgement = frappe_client.acknowledge.call_args.args[1][0]
 		self.assertEqual(acknowledgement["status"], "Success")
 		self.assertEqual(acknowledgement["tally_voucher_id"], "42")
+
+	def test_created_voucher_with_missing_stock_is_acknowledged_as_failed(self):
+		document = dict(sample_order(), source_doctype="Delivery Note", name="DN-FULL")
+		frappe_client = Mock()
+		frappe_client.get_unsynced_documents.return_value = {
+			"schema_version": 1,
+			"flow": self.config.flow_name,
+			"agent_profile": "inventory_sales_voucher_v1",
+			"documents": [document, dict(document, name="DN-NEXT")],
+		}
+		tally = Mock()
+		tally.get_current_company.return_value = self.config.tally_company
+		tally.import_xml.return_value = XMLImportResult(success=True, created=1, last_voucher_id="42")
+		tally.export_collection.side_effect = [
+			collection_response(), *master_readbacks(), saved_voucher(document, stock=False),
+		]
+
+		result = SyncService(self.config, frappe_client, tally).sync_once()
+
+		self.assertEqual((result.succeeded, result.failed, result.skipped), (0, 1, 1))
+		tally.import_xml.assert_called_once()
+		ack = frappe_client.acknowledge.call_args.args[1][0]
+		self.assertEqual(ack["status"], "Failed")
+		self.assertIn("did not retain the expected stock items", ack["error"])
+		self.assertEqual(ack["target_reference"], "")
 
 	def test_educational_date_override_preserves_original_date_in_narration(self):
 		frappe_client = Mock()
@@ -537,6 +670,10 @@ class TestSyncService(TestCase):
 		tally_client.get_current_company.return_value = "Tally Company"
 		tally_client.get_logical_function.return_value = True
 		tally_client.import_json.return_value = XMLImportResult(success=True, altered=1)
+		tally_client.export_collection.side_effect = [
+			collection_response(), *master_readbacks(),
+			saved_voucher(sample_order(), master_id="43", date="20260801"),
+		]
 		tally_client.import_xml.return_value = XMLImportResult(
 			success=True, created=1, last_voucher_id="43"
 		)

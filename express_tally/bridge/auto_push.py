@@ -1,4 +1,4 @@
-"""Pull Delivery Note / Stock Entry changes from ERPNext and push them to Tally.
+"""Pull Stock Entry changes from ERPNext and push them to Tally.
 
 The ERPNext site is remote and this agent runs behind NAT, so the site cannot
 call us. This module polls the site's cursor feed instead: ask for documents
@@ -10,32 +10,31 @@ Run it beside the bridge:
 """
 
 import argparse
+import json
 import logging
 import time
-from datetime import date
+from decimal import Decimal
 
 from .clients import BridgeRequestError, FrappeClient, TallyClient
+from .common import stable_digest
 from .config import BridgeConfig
-from .xml_gateway import build_stock_journal_import
+from .voucher_readback import read_voucher, verify_stock_journal
+from .xml_gateway import build_stock_journal_import, current_company_request, voucher_remote_id
 
 LOGGER = logging.getLogger("erpnext_tally_bridge.auto_push")
 
-PUSH_DOCTYPES = ("Delivery Note", "Stock Entry")
+PUSH_DOCTYPE = "Stock Entry"
 PENDING_PATH = "/api/method/express_tally.integrations.auto_push.get_changed_documents"
 DOCUMENT_PATH = "/api/method/express_tally.integrations.auto_push.get_document"
 ACK_PATH = "/api/method/express_tally.integrations.auto_push.acknowledge"
-
-
-def _voucher_date(posting_date):
-	return str(posting_date or date.today().isoformat()).replace("-", "")
 
 
 def stock_entry_document(document):
 	"""Translate an ERPNext Stock Entry into a Tally Stock Journal."""
 	rows = []
 	for row in document.get("items") or []:
-		source = row.get("source_warehouse") or document.get("from_warehouse") or ""
-		target = row.get("target_warehouse") or document.get("to_warehouse") or ""
+		source = row.get("source_warehouse") or ""
+		target = row.get("target_warehouse") or ""
 		rows.append(
 			{
 				"item": row.get("item_name") or row.get("item_code"),
@@ -53,7 +52,7 @@ def stock_entry_document(document):
 		"source_name": document["name"],
 		"voucher_type": "Stock Journal",
 		"operation": "Create",
-		"transaction_date": str(document.get("posting_date") or date.today().isoformat()),
+		"transaction_date": document["posting_date"],
 		"narration": f"ERPNext {document['doctype']} {document['name']}",
 		"items": rows,
 	}
@@ -61,8 +60,35 @@ def stock_entry_document(document):
 
 def deliver_stock_entry(config, tally, document):
 	payload = stock_entry_document(document)
-	if not payload["items"]:
-		raise BridgeRequestError(f"{document['name']} has no items")
+	movements = (
+		("source_godown", "InventoryEntriesOut.LIST"),
+		("target_godown", "InventoryEntriesIn.LIST"),
+	)
+	legs = {tag: [] for _, tag in movements}
+	for row in payload["items"]:
+		quantity = Decimal(str(row["quantity"]))
+		if not quantity.is_finite() or quantity <= 0 or not row["item"] or not row["uom"]:
+			raise BridgeRequestError(f"{document['name']} has a stock row without a valid item, quantity or unit")
+		if not row["source_godown"] and not row["target_godown"]:
+			raise BridgeRequestError(f"{document['name']} has a stock row without a warehouse")
+		for field, tag in movements:
+			if row[field]:
+				legs[tag].append({
+					"item_code": row["item"], "stock_qty": quantity, "stock_uom": row["uom"],
+					"warehouse": row[field],
+				})
+	if not any(legs.values()):
+		raise BridgeRequestError(f"{document['name']} has no stock movements")
+	marker = f"[ExpressTallyVersion:{stable_digest(payload)}]"
+	payload["narration"] += f"\n{marker}"
+	reference = f"guid:{voucher_remote_id(payload, config.target_id)}"
+
+	def read_saved():
+		return read_voucher(tally, config.tally_company, reference)
+
+	existing = read_saved()
+	if existing:
+		return verify_stock_journal(existing, payload, marker, legs)
 	result = tally.import_xml(
 		build_stock_journal_import(payload, config.tally_company, config.target_id),
 		require_change=True,
@@ -70,45 +96,33 @@ def deliver_stock_entry(config, tally, document):
 	)
 	if not result.success:
 		raise BridgeRequestError(result.message or "Tally rejected the Stock Journal")
-	return result.last_voucher_id or "guid"
-
-
-def deliver_delivery_note(config, frappe, document):
-	"""Delivery Notes are delivered by the registered sales-document flow."""
-	raise BridgeRequestError(
-		"Delivery Note delivery is handled by srv.sales_documents_to_tally; "
-		"use the flow while the dedicated profile is being validated"
-	)
+	return verify_stock_journal(read_saved(), payload, marker, legs)
 
 
 def run_once(config, frappe, tally, limit=20):
-	"""Process one batch per doctype. Returns a per-doctype summary."""
-	summary = {}
-	for doctype in PUSH_DOCTYPES:
-		pending = frappe.request(
-			"GET", PENDING_PATH, {"doctype": doctype, "limit": limit}
-		) or []
-		delivered = 0
-		failed = []
-		cursor = ""
-		for entry in pending:
-			cursor = str(entry["modified"])
-			try:
-				document = frappe.request(
-					"GET", DOCUMENT_PATH, {"doctype": doctype, "name": entry["name"]}
-				)
-				if doctype == "Stock Entry":
-					deliver_stock_entry(config, tally, document)
-				else:
-					deliver_delivery_note(config, frappe, document)
-				delivered += 1
-			except Exception as exc:
-				failed.append(f"{entry['name']}: {str(exc)[:160]}")
-				LOGGER.warning("Push failed for %s %s: %s", doctype, entry["name"], exc)
-		if cursor:
-			frappe.request("GET", ACK_PATH, {"doctype": doctype, "cursor": cursor})
-		summary[doctype] = {"delivered": delivered, "failed": failed}
-	return summary
+	"""Acknowledge only the contiguous group of verified Stock Entries."""
+	if tally.get_current_company(current_company_request()) != config.tally_company:
+		raise BridgeRequestError(f"Load the configured Tally company '{config.tally_company}' first")
+	scope = {"doctype": PUSH_DOCTYPE, "company": config.erpnext_company, "target_id": config.target_id}
+	pending = frappe.request("GET", PENDING_PATH, {**scope, "limit": limit}) or []
+	delivered = 0
+	failed = []
+	cursor = ""
+	for entry in pending:
+		try:
+			document = frappe.request("GET", DOCUMENT_PATH, {**scope, "name": entry["name"]})
+			if document["modified"] != entry["modified"] or document["company"] != config.erpnext_company:
+				raise BridgeRequestError("Stock Entry changed after it was selected for delivery")
+			deliver_stock_entry(config, tally, document)
+		except Exception as exc:
+			failed.append(f"{entry['name']}: {exc}")
+			LOGGER.warning("Push failed for Stock Entry %s: %s", entry["name"], exc)
+			break
+		delivered += 1
+		cursor = json.dumps([str(entry["modified"]), entry["name"]])
+	if cursor:
+		frappe.request("POST", ACK_PATH, {**scope, "cursor": cursor})
+	return {PUSH_DOCTYPE: {"delivered": delivered, "failed": failed}}
 
 
 def main():
@@ -118,7 +132,8 @@ def main():
 	parser.add_argument("--config", default="")
 	args = parser.parse_args()
 
-	config = BridgeConfig.load(args.config) if args.config else BridgeConfig.load()
+	config = BridgeConfig.load(args.config or "tally-bridge.json", validate=False)
+	config.validate(require_flows=False)
 	frappe = FrappeClient(
 		config.frappe_url,
 		config.api_key,

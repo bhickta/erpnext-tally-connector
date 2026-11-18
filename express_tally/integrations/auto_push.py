@@ -1,107 +1,95 @@
-"""Cursor-based push feed for the local Tally agent.
-
-The ERPNext site is remote and the agent runs on the Tally PC behind NAT, so
-the site cannot call the agent. The agent polls this feed instead: it asks for
-documents changed since its last cursor, delivers them to Tally, then
-acknowledges.
-
-Only submitted documents are offered. The cursor lives in the site cache and
-is advanced per doctype, so a document is delivered once per modification.
-"""
+"""Company-scoped Stock Entry feed for the standalone bridge."""
 
 import json
 
 import frappe
 
-DOCTYPE_LABEL = {
-	"Delivery Note": "Delivery Note",
-	"Stock Entry": "Stock Entry",
-}
+from express_tally.bridge.common import stable_digest
 
 
-def _cache_key(doctype):
-	return f"express_tally_push_cursor::{doctype}"
+def _check_scope(doctype, company, target_id):
+	frappe.only_for(["Tally Sync User", "Accounts Manager", "Stock Manager", "System Manager"])
+	if doctype != "Stock Entry" or not company or not target_id:
+		frappe.throw("Stock Entry, company, and target ID are required for this push feed")
 
 
-def _normalise_doctype(doctype):
-	if doctype not in DOCTYPE_LABEL:
-		frappe.throw(f"Unsupported doctype for push: {doctype}")
-	return doctype
+def _cache_key(company, target_id):
+	return f"express_tally_stock_push::{stable_digest([company, target_id])}"
+
+
+def _cursor(value):
+	if not value:
+		return "", ""
+	modified, name = json.loads(value)
+	if not isinstance(modified, str) or not isinstance(name, str) or not modified or not name:
+		raise ValueError("Invalid Stock Entry cursor")
+	return modified, name
 
 
 @frappe.whitelist()
-def get_cursor(doctype):
-	"""Return the stored cursor for a doctype ('' when nothing was pushed)."""
-	doctype = _normalise_doctype(doctype)
-	return frappe.cache().get_value(_cache_key(doctype)) or ""
-
-
-@frappe.whitelist()
-def get_changed_documents(doctype, since="", limit=20):
-	"""Return submitted documents changed after ``since``, oldest first."""
-	doctype = _normalise_doctype(doctype)
+def get_changed_documents(doctype, company, target_id, limit=20):
+	"""Return the next rows ordered by modification time and document name."""
+	_check_scope(doctype, company, target_id)
 	limit = max(1, min(int(limit or 20), 100))
-	filters = {"docstatus": 1}
-	if since:
-		filters["modified"] = [">", since]
-	docs = frappe.get_all(
-		doctype,
-		filters=filters,
-		fields=["name", "modified"],
-		order_by="modified asc",
-		limit_page_length=limit,
-	)
-	return docs
+	modified, name = _cursor(frappe.cache().get_value(_cache_key(company, target_id)))
+	filters = {"company": company, "docstatus": 1}
+
+	def select(extra, count):
+		return frappe.get_list(
+			doctype,
+			filters={**filters, **extra},
+			fields=["name", "modified"],
+			order_by="modified asc, name asc",
+			limit_page_length=count,
+		)
+
+	if not modified:
+		return select({}, limit)
+	peers = select({"modified": modified, "name": [">", name]}, limit)
+	return peers + select({"modified": [">", modified]}, limit - len(peers)) if len(peers) < limit else peers
 
 
-@frappe.whitelist()
-def acknowledge(doctype, cursor):
-	"""Advance the cursor to ``cursor`` after successful delivery."""
-	doctype = _normalise_doctype(doctype)
-	if not cursor:
-		return {"cursor": get_cursor(doctype)}
-	current = frappe.cache().get_value(_cache_key(doctype)) or ""
-	if str(cursor) > str(current):
-		frappe.cache().set_value(_cache_key(doctype), str(cursor))
-	return {"cursor": get_cursor(doctype)}
-
-
-@frappe.whitelist()
-def get_document(doctype, name):
-	"""Return the fields the agent needs to build a Tally voucher."""
-	doctype = _normalise_doctype(doctype)
+@frappe.whitelist(methods=["POST"])
+def acknowledge(doctype, company, target_id, cursor):
+	"""Advance this target's cursor only for an accessible document in its company."""
+	_check_scope(doctype, company, target_id)
+	modified, name = _cursor(cursor)
 	doc = frappe.get_doc(doctype, name)
-	if doc.docstatus != 1:
-		frappe.throw(f"{doctype} {name} is not submitted")
-	fields = {
+	doc.check_permission("read")
+	if doc.company != company or doc.docstatus != 1 or str(doc.modified) != modified:
+		frappe.throw("Stock Entry changed before the push could be acknowledged")
+	cache = frappe.cache()
+	key = _cache_key(company, target_id)
+	if (modified, name) > _cursor(cache.get_value(key)):
+		cache.set_value(key, cursor)
+	return {"cursor": cache.get_value(key)}
+
+
+@frappe.whitelist()
+def get_document(doctype, company, target_id, name):
+	"""Return stock units and warehouses for a submitted Stock Entry."""
+	_check_scope(doctype, company, target_id)
+	doc = frappe.get_doc(doctype, name)
+	doc.check_permission("read")
+	if doc.company != company or doc.docstatus != 1:
+		frappe.throw(f"{doctype} {name} is not submitted for the requested company")
+	return {
 		"name": doc.name,
 		"doctype": doc.doctype,
-		"company": doc.get("company"),
-		"posting_date": str(doc.get("posting_date") or doc.get("posting_date") or ""),
-		"posting_time": str(doc.get("posting_time") or ""),
-		"remarks": doc.get("remarks") or "",
-		"customer": doc.get("customer"),
-		"supplier": doc.get("supplier"),
-		"stock_entry_type": doc.get("stock_entry_type"),
-		"from_warehouse": doc.get("from_warehouse"),
-		"to_warehouse": doc.get("to_warehouse"),
+		"company": doc.company,
+		"posting_date": str(doc.posting_date),
 		"modified": str(doc.modified),
-	}
-	rows = []
-	for row in doc.get("items") or []:
-		rows.append(
+		"items": [
 			{
-				"item_code": row.get("item_code"),
-				"item_name": row.get("item_name"),
-				"qty": row.get("qty"),
-				"uom": row.get("uom") or row.get("stock_uom"),
-				"rate": row.get("rate"),
-				"amount": row.get("amount"),
-				"warehouse": row.get("warehouse"),
-				"source_warehouse": row.get("s_warehouse"),
-				"target_warehouse": row.get("t_warehouse"),
-				"description": row.get("description"),
+				"item_code": row.item_code,
+				"item_name": row.item_name,
+				"qty": row.transfer_qty,
+				"uom": row.stock_uom,
+				"rate": row.basic_rate,
+				"amount": row.basic_amount,
+				"source_warehouse": row.s_warehouse,
+				"target_warehouse": row.t_warehouse,
 			}
-		)
-	fields["items"] = rows
-	return fields
+			for row in doc.items
+		],
+	}

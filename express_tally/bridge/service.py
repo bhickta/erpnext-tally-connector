@@ -4,8 +4,10 @@ import uuid
 from dataclasses import asdict, dataclass
 
 from .clients import BridgeRequestError
+from .common import is_success_status
 from .preview import summarize_records
 from .profiles import AgentProfileRegistry
+from .voucher_readback import VoucherReadbackError
 from .xml_gateway import current_company_request
 
 LOGGER = logging.getLogger("erpnext_tally_bridge")
@@ -149,8 +151,8 @@ class SyncService:
 
 		documents = batch.get("documents") or batch.get("orders") or []
 		summary.fetched = len(documents)
-		for document in documents:
-			result = self._sync_document(document, profile)
+		for index, document in enumerate(documents):
+			result, stop_batch = self._sync_document(document, profile)
 			try:
 				self.frappe.acknowledge(self.config, [result], flow=flow)
 			except BridgeRequestError as exc:
@@ -158,11 +160,13 @@ class SyncService:
 				LOGGER.error("Could not acknowledge %s: %s", document["name"], exc)
 				summary.failed += 1
 				summary.error = str(exc)
-				continue
-			if result["status"] == "Success":
-				summary.succeeded += 1
 			else:
-				summary.failed += 1
+				summary.succeeded += result["status"] == "Success"
+				summary.failed += result["status"] != "Success"
+			if stop_batch:
+				summary.error = result["error"] if not summary.error else f"{result['error']}; {summary.error}"
+				summary.skipped += len(documents) - index - 1
+				break
 		return summary
 
 	def _sync_inbound(self, flow, agent_profile, limit=None, default_options=None):
@@ -180,24 +184,32 @@ class SyncService:
 			}
 			records = list(profile.collect(self.config, self.tally, limit or self.config.batch_size, options))
 			summary.fetched = len(records)
+			if not records:
+				return summary
 			response = self.frappe.receive(self.config, flow, records)
 		except Exception as exc:
 			summary.error = str(exc)
 			return summary
 
-		results = response.get("results", [])
+		results = response.get("results") if isinstance(response, dict) else None
+		if (
+			not isinstance(results, list)
+			or len(results) != len(records)
+			or any(not isinstance(result, dict) for result in results)
+		):
+			summary.error = "ERPNext did not return one valid acknowledgement per Tally record"
+			summary.failed = len(records)
+			return summary
 		try:
 			profile.acknowledge_collected(self.config, records, results)
 		except Exception as exc:
 			summary.error = f"Records reached ERPNext but the local checkpoint failed: {exc}"
 		for result in results:
-			status = str(result.get("status", result.get("message", ""))).lower()
-			if status in {"success", "already exists", "skipped"}:
+			status = result.get("status", result.get("message", ""))
+			if is_success_status(status):
 				summary.succeeded += 1
 			else:
 				summary.failed += 1
-		if len(results) < len(records):
-			summary.failed += len(records) - len(results)
 		return summary
 
 	def _sync_document(self, document, profile):
@@ -216,12 +228,14 @@ class SyncService:
 			"tally_voucher_id": "",
 			"error": "",
 		}
+		stop_batch = False
 		try:
 			target_reference = profile.deliver(document, self.config, self.tally)
 			result["status"] = "Success"
 			result["target_reference"] = target_reference
 			result["tally_voucher_id"] = target_reference
 		except Exception as exc:
+			stop_batch = isinstance(exc, VoucherReadbackError)
 			result["error"] = str(exc)[:4000]
 			LOGGER.error("Sync failed for %s: %s", document.get("name"), exc)
-		return result
+		return result, stop_batch

@@ -12,6 +12,8 @@ from .config import BridgeConfig
 from .controller import ControlCentre
 from .http_server import BridgeHTTPServer
 from .service import SyncService
+from .voucher_readback import inspect_voucher
+from .xml_gateway import current_company_request
 
 
 def _default_config_path():
@@ -28,6 +30,10 @@ def _parser():
 	subparsers = parser.add_subparsers(dest="command")
 	sync = subparsers.add_parser("sync", help="Run one synchronization batch")
 	sync.add_argument("--limit", type=int)
+	inspect = subparsers.add_parser("inspect-voucher", help="Read stock lines from a saved Tally voucher")
+	inspect.add_argument("--number", required=True)
+	inspect.add_argument("--date", required=True, help="Voucher date (YYYY-MM-DD)")
+	inspect.add_argument("--voucher-type", help="Disambiguate voucher numbers shared by different types")
 	subparsers.add_parser("status", help="Check Tally connectivity and loaded company")
 	serve = subparsers.add_parser("serve", help="Run the Windows Control Centre")
 	serve.add_argument("--no-poll", action="store_true", help="Disable automatic sync")
@@ -96,14 +102,22 @@ def main(argv=None):
 				server.server_close()
 			return 0
 
-		config = BridgeConfig.load(args.config)
+		config = BridgeConfig.load(args.config, validate=command != "inspect-voucher")
+		tally = TallyClient(config.tally_url, config.request_timeout_seconds)
+		if command == "inspect-voucher":
+			if not config.tally_company:
+				raise BridgeRequestError("Set tally_company in the bridge configuration")
+			if tally.get_current_company(current_company_request()) != config.tally_company:
+				raise BridgeRequestError(f"Load the configured Tally company '{config.tally_company}' first")
+			voucher = inspect_voucher(tally, config.tally_company, args.number, args.date, args.voucher_type)
+			print(json.dumps(voucher, indent=2))
+			return 0
 		frappe = FrappeClient(
 			config.frappe_url,
 			config.api_key,
 			config.api_secret,
 			config.request_timeout_seconds,
 		)
-		tally = TallyClient(config.tally_url, config.request_timeout_seconds)
 		service = SyncService(config, frappe, tally)
 		if command == "sync":
 			result = service.sync_once(limit=args.limit).to_dict()

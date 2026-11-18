@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import re
 import uuid
 import xml.etree.ElementTree as ET
@@ -221,12 +221,12 @@ def _godown(message, name):
 	_element(godown, "PARENT", "")
 
 
-def _ledger(message, name, parent, billwise=False, gstin="", country=""):
+def _ledger(message, name, parent, billwise=False, gstin="", country="", *, affects_stock=False):
 	ledger = _element(message, "LEDGER", name=name, action="Create")
 	_element(ledger, "NAME", name)
 	_element(ledger, "PARENT", parent)
 	_element(ledger, "ISBILLWISEON", _yes_no(billwise))
-	_element(ledger, "AFFECTSSTOCK", "No")
+	_element(ledger, "AFFECTSSTOCK", _yes_no(affects_stock))
 	if country:
 		_element(ledger, "COUNTRYOFRESIDENCE", country)
 	if gstin:
@@ -235,8 +235,8 @@ def _ledger(message, name, parent, billwise=False, gstin="", country=""):
 
 
 def _stock_item(message, item):
-	stock_item = _element(message, "STOCKITEM", name=item["item_code"], action="Create")
-	_element(stock_item, "NAME", item["item_code"])
+	stock_item = _element(message, "STOCKITEM", name=stock_item_name(item), action="Create")
+	_element(stock_item, "NAME", stock_item_name(item))
 	_element(stock_item, "PARENT", item.get("item_group") or "")
 	_element(stock_item, "BASEUNITS", item["stock_uom"])
 	_element(stock_item, "DESCRIPTION", item.get("description") or item.get("item_name") or "")
@@ -266,7 +266,7 @@ def build_master_import(order, company):
 		gstin=customer.get("gstin") or "",
 		country=customer.get("country") or "",
 	)
-	_ledger(message, order["sales_ledger"], "Sales Accounts")
+	_ledger(message, order["sales_ledger"], "Sales Accounts", affects_stock=bool(order["items"]))
 	for tax in order["taxes"]:
 		_ledger(message, tax["ledger"], "Duties & Taxes")
 	if order.get("rounding_adjustment"):
@@ -304,7 +304,7 @@ def build_master_imports(order, company):
 		gstin=customer.get("gstin") or "",
 		country=customer.get("country") or "",
 	)
-	_ledger(message, order["sales_ledger"], "Sales Accounts")
+	_ledger(message, order["sales_ledger"], "Sales Accounts", affects_stock=bool(order["items"]))
 	for tax in order["taxes"]:
 		_ledger(message, tax["ledger"], "Duties & Taxes")
 	if order.get("rounding_adjustment"):
@@ -367,6 +367,7 @@ def build_stock_journal_import(order, company, target_id):
 	"""
 	root, message = _import_envelope("Vouchers", company)
 	attributes, remote_id = _voucher_attributes(order, target_id)
+	attributes["OBJVIEW"] = "Inventory Voucher View"
 	voucher = _element(message, "VOUCHER", **attributes)
 	_element(voucher, "GUID", remote_id)
 	_element(voucher, "DATE", _date(order["transaction_date"]))
@@ -375,7 +376,7 @@ def build_stock_journal_import(order, company, target_id):
 	_element(voucher, "VOUCHERNUMBER", order.get("source_name") or "")
 	_element(voucher, "REFERENCE", order.get("source_name") or "")
 	_element(voucher, "NARRATION", order.get("narration") or "")
-	_element(voucher, "PERSISTEDVIEW", "Invoice Voucher View")
+	_element(voucher, "PERSISTEDVIEW", "Inventory Voucher View")
 	_element(voucher, "ISOPTIONAL", "No")
 
 	for item in order.get("items") or ():
@@ -383,7 +384,7 @@ def build_stock_journal_import(order, company, target_id):
 		rate = Decimal(str(item.get("rate") or 0))
 		amount = Decimal(str(item.get("amount") or 0))
 		unit = str(item.get("uom") or "").strip()
-		quantity_text = f"{quantity} {unit}".strip()
+		quantity_text = _quantity(quantity, unit)
 		for godown, outgoing in (
 			(item.get("source_godown"), True),
 			(item.get("target_godown"), False),
@@ -391,15 +392,16 @@ def build_stock_journal_import(order, company, target_id):
 			if not godown:
 				continue
 			signed = -amount if outgoing else amount
-			entry = _element(voucher, "ALLINVENTORYENTRIES.LIST")
+			entry = _element(voucher, "INVENTORYENTRIESOUT.LIST" if outgoing else "INVENTORYENTRIESIN.LIST")
 			_element(entry, "STOCKITEMNAME", item.get("item") or "")
 			_element(entry, "ISDEEMEDPOSITIVE", _yes_no(outgoing))
 			_element(entry, "ACTUALQTY", quantity_text)
 			_element(entry, "BILLEDQTY", quantity_text)
-			_element(entry, "RATE", _amount(rate))
+			_element(entry, "RATE", f"{_amount(rate)}/{unit}")
 			_element(entry, "AMOUNT", _amount(signed))
 			batch = _element(entry, "BATCHALLOCATIONS.LIST")
 			_element(batch, "GODOWNNAME", godown)
+			_element(batch, "BATCHNAME", "Primary Batch")
 			_element(batch, "ACTUALQTY", quantity_text)
 			_element(batch, "BILLEDQTY", quantity_text)
 			_element(batch, "AMOUNT", _amount(signed))
@@ -414,8 +416,8 @@ def build_delivery_note_import(order, company, target_id):
 	Sales voucher cannot be: Tally rejects a zero-amount accounting voucher.
 	"""
 	root, message = _import_envelope("Vouchers", company)
-	attributes, remote_id = _voucher_attributes(order, target_id)
-	attributes["VCHTYPE"] = "Delivery Note"
+	attributes, remote_id = _voucher_attributes({**order, "voucher_type": "Delivery Note"}, target_id)
+	attributes["OBJVIEW"] = "Inventory Voucher View"
 	voucher = _element(message, "VOUCHER", **attributes)
 	_element(voucher, "GUID", remote_id)
 	_element(voucher, "DATE", _date(order["transaction_date"]))
@@ -428,36 +430,83 @@ def build_delivery_note_import(order, company, target_id):
 		order.get("narration")
 		or f"ERPNext {order.get('source_doctype', 'Delivery Note')} {order['name']}",
 	)
-	_element(voucher, "PERSISTEDVIEW", "Invoice Voucher View")
+	_element(voucher, "PERSISTEDVIEW", "Inventory Voucher View")
 	_element(voucher, "ISOPTIONAL", "No")
 
 	for item in order["items"]:
 		amount = Decimal(str(item.get("amount") or 0))
 		quantity = _quantity(item["stock_qty"], item["stock_uom"])
 		entry = _element(voucher, "ALLINVENTORYENTRIES.LIST")
-		_element(entry, "STOCKITEMNAME", item["item_code"])
-		_element(entry, "ISDEEMEDPOSITIVE", "No")
+		_element(entry, "STOCKITEMNAME", stock_item_name(item))
+		_element(entry, "ISDEEMEDPOSITIVE", _yes_no(Decimal(str(item["stock_qty"])) < 0))
 		_element(entry, "ACTUALQTY", quantity)
 		_element(entry, "BILLEDQTY", quantity)
 		_element(entry, "RATE", f"{_amount(item.get('rate'))}/{item['stock_uom']}")
 		_element(entry, "AMOUNT", _amount(amount))
 		batch = _element(entry, "BATCHALLOCATIONS.LIST")
-		_element(batch, "GODOWNNAME", item.get("warehouse") or "")
+		_element(batch, "GODOWNNAME", item.get("warehouse") or "Main Location")
+		_element(batch, "BATCHNAME", "Primary Batch")
 		_element(batch, "ACTUALQTY", quantity)
 		_element(batch, "BILLEDQTY", quantity)
 		_element(batch, "AMOUNT", _amount(amount))
 	return ET.tostring(root, encoding="unicode")
 
 
+def stock_item_name(item):
+	return item.get("tally_name") or item.get("item_name") or item["item_code"]
+
+
+def _sales_inventory_entry(parent, tag, item, sales_ledger=None):
+	amount = Decimal(str(item["amount"] or 0))
+	entry = _element(parent, tag)
+	_element(entry, "STOCKITEMNAME", stock_item_name(item))
+	_element(entry, "ISDEEMEDPOSITIVE", _yes_no(Decimal(str(item["stock_qty"])) < 0))
+	if amount or sales_ledger:
+		_element(entry, "RATE", f"{_amount(item['rate'])}/{item['stock_uom']}")
+		_element(entry, "AMOUNT", _amount(amount))
+	qty = _quantity(item["stock_qty"], item["stock_uom"])
+	_element(entry, "ACTUALQTY", qty)
+	_element(entry, "BILLEDQTY", qty)
+	if item.get("warehouse"):
+		batch = _element(entry, "BATCHALLOCATIONS.LIST")
+		_element(batch, "GODOWNNAME", item["warehouse"])
+		_element(batch, "BATCHNAME", "Primary Batch")
+		_element(batch, "DESTINATIONGODOWNNAME", item["warehouse"])
+		if amount or sales_ledger:
+			_element(batch, "AMOUNT", _amount(amount))
+		_element(batch, "ACTUALQTY", qty)
+		_element(batch, "BILLEDQTY", qty)
+	if sales_ledger:
+		_ledger_entry(entry, "ACCOUNTINGALLOCATIONS.LIST", sales_ledger, amount, include_zero=True)
+
+
+def _ledger_entry(parent, tag, ledger, amount, *, party=False, include_zero=False):
+	entry = _element(parent, tag)
+	_element(entry, "LEDGERNAME", ledger)
+	debit = _yes_no(amount < 0)
+	_element(entry, "ISDEEMEDPOSITIVE", debit)
+	if party:
+		_element(entry, "ISPARTYLEDGER", "Yes")
+		_element(entry, "ISLASTDEEMEDPOSITIVE", debit)
+	if amount or include_zero:
+		_element(entry, "AMOUNT", _amount(amount))
+	return entry
+
+
 def build_voucher_import(order, company, target_id):
 	root, message = _import_envelope("Vouchers", company)
 	attributes, remote_id = _voucher_attributes(order, target_id)
-	voucher_type = order.get("voucher_type") or "Sales"
+	is_invoice = bool(order.get("is_invoice"))
+	view = "Invoice Voucher View" if is_invoice else "Accounting Voucher View"
+	attributes["OBJVIEW"] = view
 	voucher = _element(message, "VOUCHER", **attributes)
 	_element(voucher, "GUID", remote_id)
 	_element(voucher, "DATE", _date(order["transaction_date"]))
-	_element(voucher, "VOUCHERTYPENAME", voucher_type)
+	_element(voucher, "VOUCHERTYPENAME", attributes["VCHTYPE"])
 	_element(voucher, "VOUCHERNUMBER", order["name"])
+	if order["operation"] == "Cancel":
+		return ET.tostring(root, encoding="unicode")
+
 	_element(voucher, "REFERENCE", order.get("reference") or order["name"])
 	_element(voucher, "PARTYNAME", order["customer"]["name"])
 	_element(voucher, "PARTYLEDGERNAME", order["customer"]["name"])
@@ -465,102 +514,51 @@ def build_voucher_import(order, company, target_id):
 	narration = order.get("narration") or f"ERPNext {source_doctype} {order['name']}"
 	if order.get("origin_marker"):
 		narration = f"[ExpressTallyOrigin:{order['origin_marker']}]\n{narration}"
-	_element(
-		voucher,
-		"NARRATION",
-		narration,
-	)
-	_element(voucher, "PERSISTEDVIEW", "Invoice Voucher View")
-	_element(voucher, "VCHENTRYMODE", "Item Invoice")
-	_element(voucher, "ISINVOICE", _yes_no(order.get("is_invoice")))
+	_element(voucher, "NARRATION", narration)
+	_element(voucher, "PERSISTEDVIEW", view)
+	_element(voucher, "OBJVIEW", view)
+	if is_invoice:
+		_element(voucher, "VCHENTRYMODE", "Item Invoice")
+	_element(voucher, "ISINVOICE", _yes_no(is_invoice))
 	_element(voucher, "ISORDER", "No")
 	_element(voucher, "ISOPTIONAL", "No")
 
-	# Tally expects the stock lines before the ledger lines; when they are
-	# appended afterwards the block is imported empty.
-	for item in order["items"]:
-		item_amount = Decimal(str(item["amount"] or 0))
-		inventory = _element(voucher, "ALLINVENTORYENTRIES.LIST")
-		_element(inventory, "STOCKITEMNAME", item.get("tally_name") or item["item_code"])
-		_element(inventory, "ISDEEMEDPOSITIVE", _yes_no(item_amount < 0))
-		_element(inventory, "ISLASTDEEMEDPOSITIVE", _yes_no(item_amount < 0))
-		_element(inventory, "GSTOVRDNISREVCHARGEAPPL", "Not Applicable")
-		_element(inventory, "GSTOVRDNTYPEOFSUPPLY", "Goods")
-		_element(inventory, "GSTRATEINFERAPPLICABILITY", "As per Masters/Company")
-		_element(inventory, "GSTHSNINFERAPPLICABILITY", "As per Masters/Company")
-		_element(inventory, "GSTOVRDNISTAXONMRPAPPLICABLE", "Not Applicable")
-		_element(inventory, "ISRCMAPPLICABLE", "No")
-		_element(inventory, "ISGSTASSESSABLEVALUEOVERRIDDEN", "No")
-		_element(inventory, "STRDISGSTAPPLICABLE", "No")
-		_element(inventory, "CONTENTNEGISPOS", "No")
-		_element(inventory, "ISAUTONEGATE", "No")
-		_element(inventory, "ISCUSTOMSCLEARANCE", "No")
-		_element(inventory, "ISTRACKCOMPONENT", "No")
-		_element(inventory, "ISTRACKPRODUCTION", "No")
-		_element(inventory, "ISPRIMARYITEM", "No")
-		_element(inventory, "ISSCRAP", "No")
-		_element(inventory, "RATE", f"{_amount(item['rate'])}/{item['stock_uom']}")
-		_element(inventory, "AMOUNT", _amount(item_amount))
-		qty = _quantity(item["stock_qty"], item["stock_uom"])
-		_element(inventory, "ACTUALQTY", qty)
-		_element(inventory, "BILLEDQTY", qty)
-		if item.get("warehouse"):
-			batch = _element(inventory, "BATCHALLOCATIONS.LIST")
-			_element(batch, "GODOWNNAME", item["warehouse"])
-			_element(batch, "BATCHNAME", "Primary Batch")
-			_element(batch, "DESTINATIONGODOWNNAME", item["warehouse"])
-			_element(batch, "AMOUNT", _amount(item_amount))
-			_element(batch, "ACTUALQTY", qty)
-			_element(batch, "BILLEDQTY", qty)
-
-		# Item Invoice mode posts each stock line through its own accounting
-		# allocation; without this Tally stores the line but drops it.
-		allocation = _element(inventory, "ACCOUNTINGALLOCATIONS.LIST")
-		_element(allocation, "LEDGERNAME", order["sales_ledger"])
-		_element(allocation, "ISDEEMEDPOSITIVE", "No")
-		_element(allocation, "LEDGERFROMITEM", "No")
-		_element(allocation, "REMOVEZEROENTRIES", "No")
-		_element(allocation, "ISPARTYLEDGER", "No")
-		_element(allocation, "AMOUNT", _amount(item_amount))
-
-	grand_total = Decimal(str(order["grand_total"] or 0))
-	party_entry = _element(voucher, "LEDGERENTRIES.LIST")
-	_element(party_entry, "LEDGERNAME", order["customer"]["name"])
-	party_amount = -grand_total
-	_element(party_entry, "ISDEEMEDPOSITIVE", _yes_no(party_amount < 0))
-	_element(party_entry, "ISPARTYLEDGER", "Yes")
-	_element(party_entry, "ISLASTDEEMEDPOSITIVE", _yes_no(party_amount < 0))
-	if grand_total:
-		_element(party_entry, "AMOUNT", _amount(party_amount))
+	party_amount = -Decimal(str(order["grand_total"] or 0))
+	party_entry = _ledger_entry(
+		voucher, "LEDGERENTRIES.LIST", order["customer"]["name"], party_amount, party=True
+	)
+	if party_amount:
 		bill = _element(party_entry, "BILLALLOCATIONS.LIST")
 		_element(bill, "NAME", order["name"])
 		_element(bill, "BILLTYPE", "New Ref")
 		_element(bill, "AMOUNT", _amount(party_amount))
 
-
-	sales_entry = _element(voucher, "LEDGERENTRIES.LIST")
-	_element(sales_entry, "LEDGERNAME", order["sales_ledger"])
-	net_total = Decimal(
-		str(order.get("net_total") or sum(Decimal(str(item["amount"] or 0)) for item in order["items"]))
-	)
-	_element(sales_entry, "ISDEEMEDPOSITIVE", _yes_no(net_total < 0))
-	if net_total:
-		_element(sales_entry, "AMOUNT", _amount(net_total))
-
+	items = order["items"]
+	sales_ledger = order["sales_ledger"]
+	# Invoice view derives the sales posting from the per-item allocations.
+	# Accounting view puts the same inventory under the sales ledger instead.
+	if not is_invoice or not items:
+		net_total = Decimal(
+			str(order.get("net_total") or sum(Decimal(str(item["amount"] or 0)) for item in items))
+		)
+		sales_entry = _ledger_entry(voucher, "LEDGERENTRIES.LIST", sales_ledger, net_total)
+		for item in items:
+			_sales_inventory_entry(sales_entry, "INVENTORYALLOCATIONS.LIST", item)
 
 	for tax in order["taxes"]:
-		tax_amount = Decimal(str(tax["amount"] or 0))
-		tax_entry = _element(voucher, "LEDGERENTRIES.LIST")
-		_element(tax_entry, "LEDGERNAME", tax["ledger"])
-		_element(tax_entry, "ISDEEMEDPOSITIVE", _yes_no(tax_amount < 0))
-		_element(tax_entry, "AMOUNT", _amount(tax_amount))
-
+		_ledger_entry(
+			voucher, "LEDGERENTRIES.LIST", tax["ledger"], Decimal(str(tax["amount"] or 0)),
+			include_zero=True,
+		)
 	if order.get("rounding_adjustment"):
-		rounding_entry = _element(voucher, "LEDGERENTRIES.LIST")
-		_element(rounding_entry, "LEDGERNAME", order["round_off_ledger"])
-		is_positive = Decimal(str(order["rounding_adjustment"])) < 0
-		_element(rounding_entry, "ISDEEMEDPOSITIVE", _yes_no(is_positive))
-		_element(rounding_entry, "AMOUNT", _amount(order["rounding_adjustment"]))
+		_ledger_entry(
+			voucher, "LEDGERENTRIES.LIST", order["round_off_ledger"],
+			Decimal(str(order["rounding_adjustment"])),
+		)
+
+	if is_invoice:
+		for item in items:
+			_sales_inventory_entry(voucher, "ALLINVENTORYENTRIES.LIST", item, sales_ledger)
 	return ET.tostring(root, encoding="unicode")
 
 
@@ -573,6 +571,7 @@ class ImportResult:
 	errors: int = 0
 	last_voucher_id: str = ""
 	message: str = ""
+	combined: int = 0
 
 
 def _text(root, name, default=""):
@@ -580,51 +579,43 @@ def _text(root, name, default=""):
 	return (element.text or default).strip() if element is not None else default
 
 
-def _integer(root, name):
-	try:
-		return int(_text(root, name, "0"))
-	except ValueError:
-		return 0
-
-
 def parse_import_response(xml, require_change=False, allow_ignored=False):
 	try:
 		root = ET.fromstring(xml)
 	except ET.ParseError as exc:
 		raise ValueError(f"Tally returned invalid XML: {xml[:500]}") from exc
-	created = _integer(root, "CREATED")
-	altered = _integer(root, "ALTERED")
-	ignored = _integer(root, "IGNORED")
-	errors = _integer(root, "ERRORS")
-	exceptions = _integer(root, "EXCEPTIONS")
-	status = _text(root, "STATUS", "1")
-	line_errors = [
-		(element.text or "").strip()
-		for element in root.findall(".//LINEERROR")
-		if (element.text or "").strip()
-	]
-	message = "; ".join(line_errors) or _text(root, "DATA")
+	tally_fields = ("CREATED", "ALTERED", "IGNORED", "ERRORS", "EXCEPTIONS", "COMBINED", "CANCELLED")
+	elements = {field: root.find(f".//{field}") for field in tally_fields}
+	message = "; ".join(
+		element.text.strip() for element in root.iter()
+		if element.tag in {"LINEERROR", "ERROR", "ERRORMSG"} and (element.text or "").strip()
+	)
+	data = root.find(".//DATA")
+	if not message and data is not None and not len(data):
+		message = (data.text or "").strip()
+	if not message and root.tag == "RESPONSE" and not len(root):
+		message = (root.text or "").strip()
+	if not any(element is not None for element in elements.values()):
+		return ImportResult(False, message=message or "Tally returned no import result")
+	try:
+		counts = {
+			field: int(element.text or "0") if element is not None else 0
+			for field, element in elements.items()
+		}
+	except ValueError:
+		return ImportResult(False, message="Tally returned an invalid import count")
+	if any(value < 0 for value in counts.values()):
+		return ImportResult(False, message="Tally returned a negative import count")
+	created, altered, ignored, errors, exceptions, combined, cancelled = counts.values()
 	if not message and (errors or exceptions):
 		message = f"Tally reported errors={errors}, exceptions={exceptions}"
-	changed = created + altered + _integer(root, "COMBINED") + _integer(root, "CANCELLED")
-	accepted = changed > 0 or (allow_ignored and ignored > 0)
-	success = (
-		status != "0"
-		and errors == 0
-		and exceptions == 0
-		and not line_errors
-		and (not require_change or accepted)
-	)
-	if require_change and not accepted and not message:
-		message = f"Tally did not create or alter the voucher (ignored={ignored})"
+	accepted = bool(created + altered + combined + cancelled or (allow_ignored and ignored))
+	success = _text(root, "STATUS", "1") == "1" and not message and (not require_change or accepted)
+	if not success and not message:
+		message = f"Tally did not accept the import (ignored={ignored})"
 	return ImportResult(
-		success=success,
-		created=created,
-		altered=altered,
-		ignored=ignored,
-		errors=errors,
-		last_voucher_id=_text(root, "LASTVCHID"),
-		message=message,
+		success=success, created=created, altered=altered, ignored=ignored, errors=errors,
+		last_voucher_id=_text(root, "LASTVCHID"), message=message, combined=combined,
 	)
 
 
