@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
+from express_tally.bridge.clients import BridgeRequestError
 from express_tally.bridge.config import BridgeConfig
 from express_tally.bridge.inbound_profiles import CheckpointStore, TallyPaymentVouchersProfile
 from express_tally.bridge.payment_gateway import build_payment_import
@@ -39,6 +40,22 @@ def payment():
 	}
 
 
+def saved_payment(document, *, cancelled=False, allocation=True):
+	guid = document.get("tally_voucher_id", f"guid:{voucher_remote_id(document, 'target')}").removeprefix("guid:")
+	bill = (
+		"<BILLALLOCATIONS.LIST><NAME>INV-1</NAME><BILLTYPE>Agst Ref</BILLTYPE><AMOUNT>100.00</AMOUNT></BILLALLOCATIONS.LIST>"
+		if allocation else ""
+	)
+	return f"""<ENVELOPE><VOUCHER><MASTERID>42</MASTERID><GUID>{guid}</GUID>
+		<VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME><DATE>02-Apr-25</DATE>
+		<ISCANCELLED>{'Yes' if cancelled else 'No'}</ISCANCELLED>
+		<NARRATION>[ExpressTallySource:{guid}]</NARRATION>
+		<ALLLEDGERENTRIES.LIST><LEDGERNAME>Customer One</LEDGERNAME><AMOUNT>100.00 Cr</AMOUNT>{bill}</ALLLEDGERENTRIES.LIST>
+		<ALLLEDGERENTRIES.LIST><LEDGERNAME>Cash</LEDGERNAME><AMOUNT>-98.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+		<ALLLEDGERENTRIES.LIST><LEDGERNAME>Fees</LEDGERNAME><AMOUNT>2.00 Dr</AMOUNT></ALLLEDGERENTRIES.LIST>
+		</VOUCHER></ENVELOPE>"""
+
+
 class TestPaymentGateway(TestCase):
 	def test_receipt_retains_bank_fee_and_bill_allocation(self):
 		root = ET.fromstring(build_payment_import(payment(), "Company", "target"))
@@ -67,6 +84,7 @@ class TestPaymentGateway(TestCase):
 		doc = dict(payment(), operation="Cancel", tally_voucher_id="guid:existing-guid")
 		client = Mock()
 		client.import_xml.return_value = ImportResult(success=True, last_voucher_id="42")
+		client.export_collection.side_effect = [saved_payment(doc), saved_payment(doc, cancelled=True)]
 		self.assertEqual(
 			PaymentVoucherProfile().deliver(
 				doc, BridgeConfig(tally_company="Company", target_id="target"), client
@@ -88,13 +106,25 @@ class TestPaymentGateway(TestCase):
 
 	def test_lost_acknowledgement_reuses_tally_master_id(self):
 		client = Mock()
-		client.export_collection.return_value = (
-			"<ENVELOPE><VOUCHER><MASTERID>42</MASTERID><ISCANCELLED>No</ISCANCELLED></VOUCHER></ENVELOPE>"
-		)
+		client.export_collection.return_value = saved_payment(payment())
 		config = BridgeConfig(tally_company="Company", target_id="target")
 		self.assertEqual(PaymentVoucherProfile().deliver(payment(), config, client), "42")
 		client.import_xml.assert_not_called()
 		client.import_json.assert_not_called()
+
+	def test_created_payment_with_missing_bill_allocation_remains_unverified(self):
+		doc = payment()
+		client = Mock()
+		client.import_json.return_value = ImportResult(success=True, created=1)
+		client.import_xml.return_value = ImportResult(success=True, created=1, last_voucher_id="42")
+		client.export_collection.side_effect = [
+			"<ENVELOPE><BODY><DATA><COLLECTION/></DATA></BODY></ENVELOPE>",
+			saved_payment(doc, allocation=False),
+		]
+		config = BridgeConfig(tally_company="Company", target_id="target")
+		with self.assertRaisesRegex(BridgeRequestError, "ledger entries and bill allocations"):
+			PaymentVoucherProfile().deliver(doc, config, client)
+
 
 	def test_payment_checkpoint_is_separate_from_all_vouchers(self):
 		with tempfile.TemporaryDirectory() as directory:

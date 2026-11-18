@@ -255,32 +255,40 @@ class ImportResult:
 	errors: int = 0
 	last_voucher_id: str = ""
 	message: str = ""
+	combined: int = 0
 
 
 def parse_import_response(payload, require_change=False, allow_ignored=False):
-	result = payload.get("data", {}).get("import_result", {})
-	created = int(result.get("created") or 0)
-	altered = int(result.get("altered") or 0)
-	ignored = int(result.get("ignored") or 0)
-	errors = int(result.get("errors") or 0)
-	exceptions = int(result.get("exceptions") or 0)
-	cancelled = int(result.get("cancelled") or 0)
-	changed = created + altered + int(result.get("combined") or 0) + cancelled
-	accepted = changed > 0 or (allow_ignored and ignored > 0)
+	if not isinstance(payload, dict):
+		return ImportResult(False, message="Tally returned no import result")
+	data = payload.get("data")
+	result = data.get("import_result") if isinstance(data, dict) else None
+	fields = ("created", "altered", "ignored", "errors", "exceptions", "combined", "cancelled")
+	if not isinstance(result, dict) or not set(fields).intersection(result):
+		return ImportResult(False, message=str(payload.get("error") or data or "Tally returned no import result"))
+	try:
+		created, altered, ignored, errors, exceptions, combined, cancelled = (
+			int(result.get(field) or 0) for field in fields
+		)
+	except (ValueError, TypeError):
+		return ImportResult(False, message="Tally returned an invalid import count")
+	if min(created, altered, ignored, errors, exceptions, combined, cancelled) < 0:
+		return ImportResult(False, message="Tally returned a negative import count")
+	accepted = bool(created + altered + combined + cancelled or (allow_ignored and ignored))
 	messages = result.get("line_errors") or result.get("lineerror") or payload.get("error") or ""
 	if isinstance(messages, list):
 		messages = "; ".join(str(message) for message in messages)
 	if not messages and (errors or exceptions):
 		messages = f"Tally reported errors={errors}, exceptions={exceptions}"
 	success = (
-		str(payload.get("status", "1")) != "0"
+		str(payload.get("status", "1")) == "1"
 		and errors == 0
 		and exceptions == 0
 		and not messages
 		and (not require_change or accepted)
 	)
-	if require_change and not accepted and not messages:
-		messages = f"Tally did not create or alter the voucher (ignored={ignored})"
+	if not success and not messages:
+		messages = f"Tally did not accept the import (ignored={ignored})"
 	return ImportResult(
 		success=success,
 		created=created,
@@ -289,4 +297,5 @@ def parse_import_response(payload, require_change=False, allow_ignored=False):
 		errors=errors,
 		last_voucher_id=str(result.get("lastvchid") or ""),
 		message=str(messages),
+		combined=combined,
 	)

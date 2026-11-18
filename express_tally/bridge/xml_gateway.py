@@ -367,6 +367,7 @@ def build_stock_journal_import(order, company, target_id):
 	"""
 	root, message = _import_envelope("Vouchers", company)
 	attributes, remote_id = _voucher_attributes(order, target_id)
+	attributes["OBJVIEW"] = "Inventory Voucher View"
 	voucher = _element(message, "VOUCHER", **attributes)
 	_element(voucher, "GUID", remote_id)
 	_element(voucher, "DATE", _date(order["transaction_date"]))
@@ -375,7 +376,7 @@ def build_stock_journal_import(order, company, target_id):
 	_element(voucher, "VOUCHERNUMBER", order.get("source_name") or "")
 	_element(voucher, "REFERENCE", order.get("source_name") or "")
 	_element(voucher, "NARRATION", order.get("narration") or "")
-	_element(voucher, "PERSISTEDVIEW", "Invoice Voucher View")
+	_element(voucher, "PERSISTEDVIEW", "Inventory Voucher View")
 	_element(voucher, "ISOPTIONAL", "No")
 
 	for item in order.get("items") or ():
@@ -383,7 +384,7 @@ def build_stock_journal_import(order, company, target_id):
 		rate = Decimal(str(item.get("rate") or 0))
 		amount = Decimal(str(item.get("amount") or 0))
 		unit = str(item.get("uom") or "").strip()
-		quantity_text = f"{quantity} {unit}".strip()
+		quantity_text = _quantity(quantity, unit)
 		for godown, outgoing in (
 			(item.get("source_godown"), True),
 			(item.get("target_godown"), False),
@@ -391,15 +392,16 @@ def build_stock_journal_import(order, company, target_id):
 			if not godown:
 				continue
 			signed = -amount if outgoing else amount
-			entry = _element(voucher, "ALLINVENTORYENTRIES.LIST")
+			entry = _element(voucher, "INVENTORYENTRIESOUT.LIST" if outgoing else "INVENTORYENTRIESIN.LIST")
 			_element(entry, "STOCKITEMNAME", item.get("item") or "")
 			_element(entry, "ISDEEMEDPOSITIVE", _yes_no(outgoing))
 			_element(entry, "ACTUALQTY", quantity_text)
 			_element(entry, "BILLEDQTY", quantity_text)
-			_element(entry, "RATE", _amount(rate))
+			_element(entry, "RATE", f"{_amount(rate)}/{unit}")
 			_element(entry, "AMOUNT", _amount(signed))
 			batch = _element(entry, "BATCHALLOCATIONS.LIST")
 			_element(batch, "GODOWNNAME", godown)
+			_element(batch, "BATCHNAME", "Primary Batch")
 			_element(batch, "ACTUALQTY", quantity_text)
 			_element(batch, "BILLEDQTY", quantity_text)
 			_element(batch, "AMOUNT", _amount(signed))
@@ -414,8 +416,8 @@ def build_delivery_note_import(order, company, target_id):
 	Sales voucher cannot be: Tally rejects a zero-amount accounting voucher.
 	"""
 	root, message = _import_envelope("Vouchers", company)
-	attributes, remote_id = _voucher_attributes(order, target_id)
-	attributes["VCHTYPE"] = "Delivery Note"
+	attributes, remote_id = _voucher_attributes({**order, "voucher_type": "Delivery Note"}, target_id)
+	attributes["OBJVIEW"] = "Inventory Voucher View"
 	voucher = _element(message, "VOUCHER", **attributes)
 	_element(voucher, "GUID", remote_id)
 	_element(voucher, "DATE", _date(order["transaction_date"]))
@@ -428,21 +430,22 @@ def build_delivery_note_import(order, company, target_id):
 		order.get("narration")
 		or f"ERPNext {order.get('source_doctype', 'Delivery Note')} {order['name']}",
 	)
-	_element(voucher, "PERSISTEDVIEW", "Invoice Voucher View")
+	_element(voucher, "PERSISTEDVIEW", "Inventory Voucher View")
 	_element(voucher, "ISOPTIONAL", "No")
 
 	for item in order["items"]:
 		amount = Decimal(str(item.get("amount") or 0))
 		quantity = _quantity(item["stock_qty"], item["stock_uom"])
 		entry = _element(voucher, "ALLINVENTORYENTRIES.LIST")
-		_element(entry, "STOCKITEMNAME", item["item_code"])
-		_element(entry, "ISDEEMEDPOSITIVE", "No")
+		_element(entry, "STOCKITEMNAME", stock_item_name(item))
+		_element(entry, "ISDEEMEDPOSITIVE", _yes_no(Decimal(str(item["stock_qty"])) < 0))
 		_element(entry, "ACTUALQTY", quantity)
 		_element(entry, "BILLEDQTY", quantity)
 		_element(entry, "RATE", f"{_amount(item.get('rate'))}/{item['stock_uom']}")
 		_element(entry, "AMOUNT", _amount(amount))
 		batch = _element(entry, "BATCHALLOCATIONS.LIST")
-		_element(batch, "GODOWNNAME", item.get("warehouse") or "")
+		_element(batch, "GODOWNNAME", item.get("warehouse") or "Main Location")
+		_element(batch, "BATCHNAME", "Primary Batch")
 		_element(batch, "ACTUALQTY", quantity)
 		_element(batch, "BILLEDQTY", quantity)
 		_element(batch, "AMOUNT", _amount(amount))
@@ -457,7 +460,7 @@ def _sales_inventory_entry(parent, tag, item, sales_ledger=None):
 	amount = Decimal(str(item["amount"] or 0))
 	entry = _element(parent, tag)
 	_element(entry, "STOCKITEMNAME", stock_item_name(item))
-	_element(entry, "ISDEEMEDPOSITIVE", _yes_no(amount < 0))
+	_element(entry, "ISDEEMEDPOSITIVE", _yes_no(Decimal(str(item["stock_qty"])) < 0))
 	if amount or sales_ledger:
 		_element(entry, "RATE", f"{_amount(item['rate'])}/{item['stock_uom']}")
 		_element(entry, "AMOUNT", _amount(amount))
@@ -568,6 +571,7 @@ class ImportResult:
 	errors: int = 0
 	last_voucher_id: str = ""
 	message: str = ""
+	combined: int = 0
 
 
 def _text(root, name, default=""):
@@ -575,51 +579,43 @@ def _text(root, name, default=""):
 	return (element.text or default).strip() if element is not None else default
 
 
-def _integer(root, name):
-	try:
-		return int(_text(root, name, "0"))
-	except ValueError:
-		return 0
-
-
 def parse_import_response(xml, require_change=False, allow_ignored=False):
 	try:
 		root = ET.fromstring(xml)
 	except ET.ParseError as exc:
 		raise ValueError(f"Tally returned invalid XML: {xml[:500]}") from exc
-	created = _integer(root, "CREATED")
-	altered = _integer(root, "ALTERED")
-	ignored = _integer(root, "IGNORED")
-	errors = _integer(root, "ERRORS")
-	exceptions = _integer(root, "EXCEPTIONS")
-	status = _text(root, "STATUS", "1")
-	line_errors = [
-		(element.text or "").strip()
-		for element in root.findall(".//LINEERROR")
-		if (element.text or "").strip()
-	]
-	message = "; ".join(line_errors) or _text(root, "DATA")
+	tally_fields = ("CREATED", "ALTERED", "IGNORED", "ERRORS", "EXCEPTIONS", "COMBINED", "CANCELLED")
+	elements = {field: root.find(f".//{field}") for field in tally_fields}
+	message = "; ".join(
+		element.text.strip() for element in root.iter()
+		if element.tag in {"LINEERROR", "ERROR", "ERRORMSG"} and (element.text or "").strip()
+	)
+	data = root.find(".//DATA")
+	if not message and data is not None and not len(data):
+		message = (data.text or "").strip()
+	if not message and root.tag == "RESPONSE" and not len(root):
+		message = (root.text or "").strip()
+	if not any(element is not None for element in elements.values()):
+		return ImportResult(False, message=message or "Tally returned no import result")
+	try:
+		counts = {
+			field: int(element.text or "0") if element is not None else 0
+			for field, element in elements.items()
+		}
+	except ValueError:
+		return ImportResult(False, message="Tally returned an invalid import count")
+	if any(value < 0 for value in counts.values()):
+		return ImportResult(False, message="Tally returned a negative import count")
+	created, altered, ignored, errors, exceptions, combined, cancelled = counts.values()
 	if not message and (errors or exceptions):
 		message = f"Tally reported errors={errors}, exceptions={exceptions}"
-	changed = created + altered + _integer(root, "COMBINED") + _integer(root, "CANCELLED")
-	accepted = changed > 0 or (allow_ignored and ignored > 0)
-	success = (
-		status != "0"
-		and errors == 0
-		and exceptions == 0
-		and not line_errors
-		and (not require_change or accepted)
-	)
-	if require_change and not accepted and not message:
-		message = f"Tally did not create or alter the voucher (ignored={ignored})"
+	accepted = bool(created + altered + combined + cancelled or (allow_ignored and ignored))
+	success = _text(root, "STATUS", "1") == "1" and not message and (not require_change or accepted)
+	if not success and not message:
+		message = f"Tally did not accept the import (ignored={ignored})"
 	return ImportResult(
-		success=success,
-		created=created,
-		altered=altered,
-		ignored=ignored,
-		errors=errors,
-		last_voucher_id=_text(root, "LASTVCHID"),
-		message=message,
+		success=success, created=created, altered=altered, ignored=ignored, errors=errors,
+		last_voucher_id=_text(root, "LASTVCHID"), message=message, combined=combined,
 	)
 
 

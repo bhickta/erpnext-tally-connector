@@ -94,7 +94,7 @@ def build_collection_export(
 	return ET.tostring(envelope, encoding="unicode")
 
 
-def parse_collection_export(payload, record_tags, *, raise_on_error=False):
+def parse_collection_export(payload, record_tags, *, raise_on_error=True):
 	"""Parse Tally's collection XML while retaining repeated nested entries."""
 	try:
 		root = ET.fromstring(_clean_tally_xml(payload))
@@ -103,18 +103,25 @@ def parse_collection_export(payload, record_tags, *, raise_on_error=False):
 			raise ValueError("Tally collection export failed: Unknown Request") from exc
 		raise ValueError(f"Tally returned invalid collection XML: {exc!s}") from exc
 	if raise_on_error:
+		failed_status = False
 		for element in root.iter():
 			tag = xml_tag(element.tag).upper()
 			message = (element.text or "").strip()
 			if (
-				tag in {"LINEERROR", "ERROR"}
-				or (tag == "STATUS" and message == "0")
+				(tag in {"LINEERROR", "ERROR", "ERRORMSG"} and bool(message))
 				or (tag in {"RESPONSE", "DATA"} and message and not len(element))
 			):
-				raise ValueError(f"Tally collection export failed: {(message or 'Unknown error')[:1000]}")
+				raise ValueError(f"Tally collection export failed: {message[:1000]}")
+			if tag == "STATUS" and message == "0":
+				failed_status = True
+		if failed_status:
+			raise ValueError("Tally collection export returned status 0")
 	tags = {normalized_key(tag) for tag in record_tags}
+	if raise_on_error and normalized_key(root.tag) not in tags | {"envelope", "collection", "data", "response"}:
+		raise ValueError("Tally returned an unexpected collection response")
+	# CMPINFO can contain counts using the same tags as the requested records.
 	records = []
-	for element in root.iter():
+	for element in _collection_elements(root):
 		if normalized_key(element.tag) not in tags:
 			continue
 		value = _element_value(element)
@@ -128,6 +135,14 @@ def parse_collection_export(payload, record_tags, *, raise_on_error=False):
 		value["_xml_tag"] = xml_tag(element.tag)
 		records.append(value)
 	return records
+
+
+def _collection_elements(root):
+	if normalized_key(root.tag) == "cmpinfo":
+		return
+	yield root
+	for child in root:
+		yield from _collection_elements(child)
 
 
 def _element_value(element):

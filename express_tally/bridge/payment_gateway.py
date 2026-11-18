@@ -1,9 +1,13 @@
 """Balanced accounting vouchers for payments, receipts, and bank transfers."""
 
 import xml.etree.ElementTree as ET
+from collections import Counter
 from decimal import Decimal
 
-from .xml_gateway import _amount, _date, _element, _import_envelope, _voucher_attributes, _yes_no
+from .collection_gateway import nested_records, scalar
+from .ledger_gateway import debit_balance
+from .voucher_readback import IDENTITY_FIELDS, read_voucher, read_vouchers, tally_xml_date
+from .xml_gateway import _amount, _date, _element, _import_envelope, _voucher_attributes, _yes_no, voucher_remote_id
 
 
 def validate_accounting_voucher(document):
@@ -94,3 +98,69 @@ def build_payment_masters(document, company):
 			for master in document.get("masters") or []
 		],
 	}
+
+
+ACCOUNTING_FIELDS = (
+	*IDENTITY_FIELDS,
+	*(
+		f"{entries}.{field}"
+		for entries in ("AllLedgerEntries", "LedgerEntries")
+		for field in ("LedgerName", "Amount", "BillAllocations.Name", "BillAllocations.BillType", "BillAllocations.Amount")
+	),
+)
+
+
+def read_accounting_voucher(tally, company, document, target_id):
+	reference = document.get("tally_voucher_id")
+	if reference:
+		return read_voucher(tally, company, str(reference), fields=ACCOUNTING_FIELDS)
+	marker = f"[ExpressTallySource:{voucher_remote_id(document, target_id)}]"
+	rows = read_vouchers(tally, company, [f'$Narration Contains "{marker}"'], fields=ACCOUNTING_FIELDS)
+	if len(rows) > 1 or (rows and marker not in scalar(rows[0], "narration").splitlines()):
+		raise ValueError("Tally returned an ambiguous accounting voucher identity")
+	return rows[0] if rows else None
+
+
+def verify_accounting_voucher(row, document):
+	if not row:
+		raise ValueError("Tally did not return the saved accounting voucher")
+	master_id = scalar(row, "masterid")
+	is_cancelled = scalar(row, "iscancelled").casefold() in {"yes", "true", "1"}
+	if (
+		not master_id.isascii() or not master_id.isdecimal() or int(master_id) < 1
+		or scalar(row, "vouchertypename").casefold() != document["voucher_type"].casefold()
+	):
+		raise ValueError("Tally returned an unexpected accounting voucher identity")
+	if document["operation"] == "Cancel":
+		if not is_cancelled:
+			raise ValueError(f"Tally voucher {master_id} is still active")
+		return master_id
+	if is_cancelled or scalar(row, "isoptional").casefold() in {"yes", "true", "1"}:
+		raise ValueError(f"Tally voucher {master_id} is cancelled or optional")
+	if tally_xml_date(scalar(row, "date")) != _date(document["transaction_date"]):
+		raise ValueError(f"Tally voucher {master_id} has a different posting date")
+
+	expected = Counter(
+		(
+			line["ledger"].strip().casefold(), Decimal(_amount(line["amount"])),
+			tuple(sorted(
+				(str(bill.get("name") or "").strip(), bill["bill_type"].strip().casefold(), Decimal(_amount(bill["amount"])))
+				for bill in line.get("bill_allocations") or ()
+			)),
+		)
+		for line in document["ledger_entries"]
+	)
+	lines = nested_records(row, "AllLedgerEntries.LIST") or nested_records(row, "LedgerEntries.LIST")
+	actual = Counter(
+		(
+			scalar(line, "ledgername").casefold(), -debit_balance(scalar(line, "amount")),
+			tuple(sorted(
+				(scalar(bill, "name"), scalar(bill, "billtype").casefold(), -debit_balance(scalar(bill, "amount")))
+				for bill in nested_records(line, "BillAllocations.LIST")
+			)),
+		)
+		for line in lines
+	)
+	if actual != expected:
+		raise ValueError(f"Tally voucher {master_id} did not retain the requested ledger entries and bill allocations")
+	return master_id

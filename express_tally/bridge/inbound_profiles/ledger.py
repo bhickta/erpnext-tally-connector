@@ -5,12 +5,13 @@ import json
 from datetime import date, timedelta
 
 from ..collection_gateway import build_collection_export, parse_collection_export, scalar
+from ..ledger_gateway import debit_balance
+from ..voucher_readback import tally_xml_date
 from ..normalization import (
 	_identity,
 	_primary_group,
 	master_name,
 	normalize_voucher,
-	tally_balance,
 )
 from .base import IncrementalTallyProfile
 from .constants import LEDGER_BALANCE_FIELDS, PAYMENT_VOUCHER_FIELDS
@@ -38,7 +39,7 @@ class TallyLedgerMirrorProfile(IncrementalTallyProfile):
 		self._scope_key = (
 			hashlib.sha256(
 				json.dumps(
-					[sorted(self._ledger_scope), options.get("fiscal_year_start") or config.from_date]
+					[sorted(self._ledger_scope), options.get("fiscal_year_start") or config.from_date, config.to_date]
 				).encode()
 			).hexdigest()[:16]
 			if self._ledger_scope
@@ -78,7 +79,7 @@ class TallyLedgerMirrorProfile(IncrementalTallyProfile):
 				"Indirect Expenses",
 			}:
 				continue
-			balance = tally_balance(scalar(raw, "closing_balance", "closingbalance"))
+			balance = debit_balance(scalar(raw, "closing_balance", "closingbalance"))
 			if not name or not balance:
 				continue
 			opening_records.append(
@@ -88,7 +89,7 @@ class TallyLedgerMirrorProfile(IncrementalTallyProfile):
 					"ledger": name,
 					"parent": scalar(raw, "parent"),
 					"primary_group": _primary_group(scalar(raw, "parent"), groups),
-					"balance": balance,
+					"balance": float(balance),
 					"posting_date": fiscal_year_start,
 					"snapshot_date": opening_snapshot_date,
 					"fiscal_year_start": fiscal_year_start,
@@ -119,18 +120,15 @@ class TallyLedgerMirrorProfile(IncrementalTallyProfile):
 		)
 		reconciliation_type = f"ledger_mirror_reconciliation_{through_date.replace('-', '_')}"
 		reconciliation_records = []
+		snapshot_rows = [
+			(master_name(raw), debit_balance(scalar(raw, "closing_balance", "closingbalance")), raw)
+			for raw in sorted(reconciliation_ledgers, key=master_name)
+		]
 		snapshot = hashlib.sha256(
-			json.dumps(
-				sorted(
-					(master_name(raw), tally_balance(scalar(raw, "closing_balance", "closingbalance")))
-					for raw in reconciliation_ledgers
-				),
-				default=str,
-			).encode()
+			json.dumps([(name, float(balance)) for name, balance, _ in snapshot_rows]).encode()
 		).hexdigest()[:16]
 		reconciliation_type += "_" + snapshot
-		for index, raw in enumerate(sorted(reconciliation_ledgers, key=master_name), 1):
-			name = master_name(raw)
+		for index, (name, balance, raw) in enumerate(snapshot_rows, 1):
 			if not name:
 				continue
 			reconciliation_records.append(
@@ -140,7 +138,7 @@ class TallyLedgerMirrorProfile(IncrementalTallyProfile):
 					"ledger": name,
 					"parent": scalar(raw, "parent"),
 					"primary_group": _primary_group(scalar(raw, "parent"), groups),
-					"balance": tally_balance(scalar(raw, "closing_balance", "closingbalance")),
+					"balance": float(balance),
 					"fiscal_year_start": fiscal_year_start,
 					"as_of_date": through_date,
 				}
@@ -197,7 +195,10 @@ class TallyLedgerMirrorProfile(IncrementalTallyProfile):
 		]
 		if validate_period:
 			for row in rows:
-				if not scalar(row, "etperiodfrom") or not scalar(row, "etperiodto"):
+				if (
+					tally_xml_date(scalar(row, "etperiodfrom")) != from_date.replace("-", "")
+					or tally_xml_date(scalar(row, "etperiodto")) != to_date.replace("-", "")
+				):
 					raise ValueError(
 						f"Tally did not accept the requested balance period {from_date} to {to_date}"
 					)

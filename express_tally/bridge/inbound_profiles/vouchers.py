@@ -2,6 +2,7 @@
 
 import json
 
+from ..common import stable_digest
 from ..collection_gateway import build_collection_export, parse_collection_export
 from ..normalization import normalize_voucher
 from .base import IncrementalTallyProfile
@@ -15,12 +16,8 @@ class TallyVouchersProfile(IncrementalTallyProfile):
 	def collect(self, config, tally_client, limit, options=None):
 		options = options or {}
 		self._scoped_collection = bool(options.get("voucher_ids") or options.get("voucher_numbers"))
-		checkpoint = (
-			0
-			if self._scoped_collection
-			else self._checkpoint_store(config).get(self._target_key(config), "voucher")
-		)
-		filters = [f"$AlterID > {checkpoint}"] if checkpoint else []
+		self._filtered_scope = ""
+		filters = []
 		voucher_ids = options.get("voucher_ids")
 		if voucher_ids is not None:
 			if (
@@ -42,6 +39,15 @@ class TallyVouchersProfile(IncrementalTallyProfile):
 				):
 					raise ValueError(f"{option} must contain between 1 and 100 nonempty strings")
 				filters.append(" OR ".join(f"({method} = {json.dumps(v)})" for v in values))
+		voucher_types = options.get("voucher_types")
+		if config.from_date or config.to_date or (voucher_types and self.key != "tally_payment_vouchers_v1"):
+			self._filtered_scope = stable_digest([
+				config.from_date, config.to_date, sorted(set(voucher_types or ())),
+			])[:16]
+		if not self._scoped_collection:
+			checkpoint = self._checkpoint_store(config).get(self._target_key(config), "voucher")
+			if checkpoint:
+				filters.append(f"$AlterID > {checkpoint}")
 		if config.from_date:
 			filters.append("$Date >= ##SVFromDate")
 		if config.to_date:
@@ -62,6 +68,13 @@ class TallyVouchersProfile(IncrementalTallyProfile):
 		raw_records = parse_collection_export(response, ("VOUCHER",))
 		records = [normalize_voucher(record) for record in raw_records]
 		return self._pending(config, [record for record in records if record], limit)
+
+	def _target_key(self, config):
+		key = super()._target_key(config)
+		if self.key == "tally_native_transactions_v1":
+			key += ":native"
+		scope = getattr(self, "_filtered_scope", "")
+		return f"{key}:{scope}" if scope else key
 
 	def _pending(self, config, records, limit):
 		if getattr(self, "_scoped_collection", False):

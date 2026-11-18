@@ -4,6 +4,7 @@ import uuid
 from dataclasses import asdict, dataclass
 
 from .clients import BridgeRequestError
+from .common import is_success_status
 from .preview import summarize_records
 from .profiles import AgentProfileRegistry
 from .voucher_readback import VoucherReadbackError
@@ -183,24 +184,32 @@ class SyncService:
 			}
 			records = list(profile.collect(self.config, self.tally, limit or self.config.batch_size, options))
 			summary.fetched = len(records)
+			if not records:
+				return summary
 			response = self.frappe.receive(self.config, flow, records)
 		except Exception as exc:
 			summary.error = str(exc)
 			return summary
 
-		results = response.get("results", [])
+		results = response.get("results") if isinstance(response, dict) else None
+		if (
+			not isinstance(results, list)
+			or len(results) != len(records)
+			or any(not isinstance(result, dict) for result in results)
+		):
+			summary.error = "ERPNext did not return one valid acknowledgement per Tally record"
+			summary.failed = len(records)
+			return summary
 		try:
 			profile.acknowledge_collected(self.config, records, results)
 		except Exception as exc:
 			summary.error = f"Records reached ERPNext but the local checkpoint failed: {exc}"
 		for result in results:
-			status = str(result.get("status", result.get("message", ""))).lower()
-			if status in {"success", "already exists", "skipped"}:
+			status = result.get("status", result.get("message", ""))
+			if is_success_status(status):
 				summary.succeeded += 1
 			else:
 				summary.failed += 1
-		if len(results) < len(records):
-			summary.failed += len(records) - len(results)
 		return summary
 
 	def _sync_document(self, document, profile):

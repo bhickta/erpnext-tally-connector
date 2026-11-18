@@ -128,6 +128,27 @@ This command uses collection export and works independently of the named
 report exports. If the collection request itself fails, the command reports
 the error.
 
+Payment, Receipt, Contra, and Journal profiles verify the saved posting date,
+ledger entries, amounts, and bill allocations. Cancellation is acknowledged
+after Tally returns the voucher as cancelled. Ledger opening sync also reads
+back the ledger name, group, bill-wise setting, and opening balance.
+
+Inbound collection errors stop the batch and leave its checkpoint available
+for retry. Acknowledgements use the Tally source identity when ERPNext returns
+it. An accepted item above a pending older version is recorded separately
+until the gap closes. Date and voucher-type filters keep separate voucher
+checkpoints. A newly separated scope starts with no checkpoint and may read
+records already seen by the older scope.
+
+The standalone Stock Entry poller uses a cursor scoped to the ERPNext company
+and destination target ID. It compares Stock Journal source and destination
+movements before acknowledging and stops at the first failed entry. Update
+the server app and standalone poller together because the feed now requires
+company and target parameters. On the first scan after upgrade, the poller may
+encounter older journals without a matching version marker. Review those
+journals before resuming the feed. Delivery Notes use the registered sales
+flow.
+
 ## Context
 
 Every operation receives a `FlowContext` containing:

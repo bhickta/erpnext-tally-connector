@@ -3,6 +3,7 @@
 import json
 import re
 from collections import Counter
+from datetime import datetime
 from decimal import Decimal
 
 from .clients import BridgeRequestError
@@ -18,13 +19,19 @@ INVENTORY_FIELDS = (
 	"BatchAllocations.ActualQty",
 	"BatchAllocations.BilledQty",
 )
+IDENTITY_FIELDS = (
+	"MasterID", "GUID", "VoucherNumber", "Date", "VoucherTypeName", "Narration",
+	"IsCancelled", "IsOptional",
+)
 VOUCHER_FIELDS = (
-	"MasterID", "GUID", "VoucherNumber", "Date", "VoucherTypeName", "Narration", "IsCancelled", "IsOptional",
+	*IDENTITY_FIELDS,
 	*(
 		f"{collection}.{field}"
 		for collection in (
 			"AllInventoryEntries",
 			"InventoryEntries",
+			"InventoryEntriesOut",
+			"InventoryEntriesIn",
 			"AllLedgerEntries.InventoryAllocations",
 			"LedgerEntries.InventoryAllocations",
 		)
@@ -34,7 +41,7 @@ VOUCHER_FIELDS = (
 
 
 class VoucherReadbackError(BridgeRequestError):
-	"""Stop the outbound batch when Tally cannot confirm voucher inventory."""
+	"""Stop the outbound batch when Tally cannot confirm the requested voucher."""
 
 
 def read_collection(tally, request, tag):
@@ -44,15 +51,15 @@ def read_collection(tally, request, tag):
 		raise BridgeRequestError(f"Tally {tag.lower()} collection read failed: {exc}") from exc
 
 
-def _read_vouchers(tally, company, filters, date=None):
+def read_vouchers(tally, company, filters, date=None, *, fields=VOUCHER_FIELDS):
 	request = build_collection_export(
-		company, "ETOutboundVoucherReadback", "Voucher", VOUCHER_FIELDS, filters,
+		company, "ETOutboundVoucherReadback", "Voucher", fields, filters,
 		static_variables={"SVFROMDATE": date, "SVTODATE": date} if date else None,
 	)
 	return read_collection(tally, request, "VOUCHER")
 
 
-def read_voucher(tally, company, reference):
+def read_voucher(tally, company, reference, *, fields=VOUCHER_FIELDS):
 	if reference.startswith("guid:"):
 		guid = reference.removeprefix("guid:")
 		field, value, formula_value = "GUID", guid, json.dumps(guid)
@@ -60,7 +67,7 @@ def read_voucher(tally, company, reference):
 		if not re.fullmatch(r"[1-9][0-9]*", reference):
 			raise BridgeRequestError(f"Invalid Tally voucher master ID: {reference}")
 		field, value, formula_value = "MasterID", reference, reference
-	rows = _read_vouchers(tally, company, [f"${field} = {formula_value}"])
+	rows = read_vouchers(tally, company, [f"${field} = {formula_value}"], fields=fields)
 	if len(rows) > 1 or (rows and scalar(rows[0], field.lower()).casefold() != value.casefold()):
 		raise BridgeRequestError("Tally returned an ambiguous voucher identity")
 	return rows[0] if rows else None
@@ -72,7 +79,7 @@ def inspect_voucher(tally, company, number, date, voucher_type=None):
 	filters = [f"$VoucherNumber = {json.dumps(number)}", "$Date = ##SVFromDate"]
 	if voucher_type:
 		filters.append(f"$VoucherTypeName = {json.dumps(voucher_type)}")
-	rows = _read_vouchers(tally, company, filters, date)
+	rows = read_vouchers(tally, company, filters, date)
 	if not rows:
 		raise BridgeRequestError(f"Tally did not return voucher {number} dated {date}")
 	if len(rows) != 1:
@@ -80,7 +87,7 @@ def inspect_voucher(tally, company, number, date, voucher_type=None):
 	row = rows[0]
 	if (
 		scalar(row, "vouchernumber") != number
-		or scalar(row, "date") != date
+		or tally_xml_date(scalar(row, "date")) != date
 		or (voucher_type and scalar(row, "vouchertypename").casefold() != voucher_type.casefold())
 	):
 		raise BridgeRequestError("Tally returned a voucher that does not match the requested number, date and type")
@@ -106,11 +113,22 @@ def inspect_voucher(tally, company, number, date, voucher_type=None):
 	}
 
 
+def tally_xml_date(text):
+	"""Normalize Tally's native and formatted XML dates."""
+	for fmt in ("%Y%m%d", "%d-%b-%Y", "%d-%b-%y", "%Y-%m-%d"):
+		try:
+			return datetime.strptime(text, fmt).strftime("%Y%m%d")
+		except ValueError:
+			continue
+	return ""
+
+
 def _inventory_entries(row):
 	# Tally can expose the same stock lines through multiple view collections.
 	return (
 		nested_records(row, "AllInventoryEntries.LIST")
 		or nested_records(row, "InventoryEntries.LIST")
+		or (nested_records(row, "InventoryEntriesOut.LIST") + nested_records(row, "InventoryEntriesIn.LIST"))
 		or nested_records(row, "InventoryAllocations.LIST")
 	)
 
@@ -123,7 +141,7 @@ def _quantity(value):
 	return Decimal(match[1].replace(",", "")), match[2].strip().casefold()
 
 
-def _matches_inventory(row, items):
+def _matches_inventory(entries, items):
 	expected = Counter()
 	for item in items:
 		name = stock_item_name(item).casefold()
@@ -132,7 +150,7 @@ def _matches_inventory(row, items):
 		expected[name, qty, qty, warehouse] += 1
 
 	unallocated = Counter()
-	for entry in _inventory_entries(row):
+	for entry in entries:
 		name = scalar(entry, "stockitemname").casefold()
 		qty = _quantity(scalar(entry, "actualqty"))
 		billed = _quantity(scalar(entry, "billedqty"))
@@ -152,20 +170,42 @@ def _matches_inventory(row, items):
 	return expected == unallocated
 
 
-def verify_voucher(row, document, version_marker):
-	name = document["name"]
-	if not row:
-		raise BridgeRequestError(f"Tally did not return a voucher for {name}")
-	master_id = scalar(row, "masterid")
+def is_cancelled(row):
+	return scalar(row or {}, "iscancelled").casefold() in {"yes", "true", "1"}
+
+
+def verify_cancelled_voucher(row, document):
+	master_id = scalar(row or {}, "masterid")
 	if (
 		not re.fullmatch(r"[1-9][0-9]*", master_id)
 		or scalar(row, "vouchertypename").casefold() != (document.get("voucher_type") or "Sales").casefold()
-		or scalar(row, "date") != _date(document["transaction_date"])
-		or scalar(row, "iscancelled").casefold() in {"yes", "true", "1"}
+		or not is_cancelled(row)
+	):
+		raise BridgeRequestError(f"Tally did not confirm the cancellation of {document['name']}")
+	return master_id
+
+
+def verify_stock_journal(row, document, version_marker, legs):
+	for tag, expected in legs.items():
+		if not _matches_inventory(nested_records(row, tag), expected):
+			raise BridgeRequestError(f"Tally Stock Journal {document['name']} did not retain {tag} stock movements")
+	return verify_voucher(row, document, version_marker, check_inventory=False)
+
+
+def verify_voucher(row, document, version_marker, *, check_inventory=True):
+	name = document["name"]
+	if not row:
+		raise BridgeRequestError(f"Tally did not return a voucher for {name}")
+	master_id = scalar(row or {}, "masterid")
+	if (
+		not re.fullmatch(r"[1-9][0-9]*", master_id)
+		or scalar(row, "vouchertypename").casefold() != (document.get("voucher_type") or "Sales").casefold()
+		or tally_xml_date(scalar(row, "date")) != _date(document["transaction_date"])
+		or is_cancelled(row)
 		or scalar(row, "isoptional").casefold() in {"yes", "true", "1"}
 	):
 		raise BridgeRequestError(f"Tally voucher for {name} has an unexpected identity or posting state")
-	if not _matches_inventory(row, document["items"]):
+	if check_inventory and not _matches_inventory(_inventory_entries(row), document["items"]):
 		raise BridgeRequestError(
 			f"Tally voucher {master_id} for {name} did not retain the expected stock items, quantities and godowns"
 		)

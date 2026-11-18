@@ -10,12 +10,15 @@ from .xml_gateway import _amount, _element, _import_envelope, _yes_no
 
 
 def debit_balance(value):
-	text = str(value or "0").replace(",", "")
-	match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
-	amount = Decimal(match.group(0)) if match else Decimal(0)
-	if text.strip().lower().endswith("dr"):
+	text = str(value if value is not None else "").replace(",", "").strip()
+	match = re.fullmatch(r"([-+]?\d+(?:\.\d+)?)\s*(dr|cr)?", text, re.IGNORECASE)
+	if not match:
+		raise ValueError(f"Tally returned a missing or invalid ledger amount: {value!r}")
+	amount = Decimal(match[1])
+	side = (match[2] or "").casefold()
+	if side == "dr":
 		return abs(amount)
-	if text.strip().lower().endswith("cr"):
+	if side == "cr":
 		return -abs(amount)
 	return -amount
 
@@ -25,7 +28,7 @@ def read_ledger(tally_client, company, name, *, from_date=None, to_date=None):
 		company,
 		"ETFinancialLedgerIdentity",
 		"Ledger",
-		("Name", "Parent", "OpeningBalance", "ClosingBalance", "GUID"),
+		("Name", "Parent", "OpeningBalance", "ClosingBalance", "GUID", "IsBillWiseOn"),
 		[f"$Name = {json.dumps(name)}"],
 		static_variables={
 			key: str(value).replace("-", "")
@@ -38,8 +41,8 @@ def read_ledger(tally_client, company, name, *, from_date=None, to_date=None):
 		for row in parse_collection_export(tally_client.export_collection(request), ("LEDGER",))
 		if scalar(row, "name", "_name")
 	]
-	if len(rows) > 1:
-		raise ValueError("Multiple Tally ledgers matched the selected name")
+	if len(rows) > 1 or (rows and scalar(rows[0], "name", "_name").casefold() != name.casefold()):
+		raise ValueError("Tally returned an ambiguous ledger identity")
 	return rows[0] if rows else None
 
 
@@ -59,7 +62,8 @@ def build_ledger_import(document, company, *, existing=False, update_opening=Tru
 	_element(ledger, "NAME", document["ledger_name"])
 	_element(ledger, "PARENT", document["parent"])
 	_element(ledger, "ISBILLWISEON", _yes_no(document.get("billwise")))
-	_element(ledger, "AFFECTSSTOCK", "No")
+	if not existing:
+		_element(ledger, "AFFECTSSTOCK", "No")
 	if update_opening:
 		_element(ledger, "OPENINGBALANCE", _amount(-amount))
 	return ET.tostring(root, encoding="unicode")

@@ -277,6 +277,8 @@ class TestTallyXMLVoucherGateway(TestCase):
 		config = BridgeConfig(target_id="target-1", tally_company="Test Company")
 		tally = Mock()
 		tally.import_xml.return_value = XMLImportResult(success=True, altered=1, last_voucher_id="42")
+		active = saved_voucher(document)
+		tally.export_collection.side_effect = [active, active.replace("<ISCANCELLED>No", "<ISCANCELLED>Yes")]
 
 		target = InventorySalesVoucherProfile().deliver(document, config, tally)
 

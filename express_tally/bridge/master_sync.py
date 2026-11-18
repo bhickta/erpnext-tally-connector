@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import time
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from .clients import BridgeRequestError
 from .collection_gateway import build_collection_export, parse_collection_export
 from .master_trace import MasterTrace
 from .normalization import master_name
+from .voucher_readback import tally_xml_date
 from .xml_gateway import resolve_unit_names, unit_name_error
 
 LOGGER = logging.getLogger("erpnext_tally_bridge.master_sync")
@@ -109,12 +111,20 @@ EXISTING_MASTER_COLLECTIONS = {
 	"units": ("Unit", ("UNIT",)),
 	"item_groups": ("Stock Group", ("STOCKGROUP", "STOCKGROUPS")),
 	"account_groups": ("Group", ("GROUP",)),
+	"party_groups": ("Group", ("GROUP",)),
 	"account_ledgers": ("Ledger", ("LEDGER",)),
 	"warehouses": ("Godown", ("GODOWN",)),
 	"customers": ("Ledger", ("LEDGER",)),
 	"suppliers": ("Ledger", ("LEDGER",)),
-	"items": ("Stock Item", ("STOCKITEM",)),
+	"items": ("Stock Item", ("STOCKITEM", "STOCKITEMS")),
 }
+
+
+def retryable_batch_rejection(result):
+	"""Replay only an explicit rejection with no writes or ignored objects."""
+	return not result.success and result.errors and not (
+		result.created or result.altered or result.combined or result.ignored
+	)
 
 
 def normalize_masters(masters):
@@ -349,6 +359,7 @@ class MasterSyncService:
 		cancel_event=None,
 	):
 		self._existing_names_by_type.clear()
+		self._tally_group_names = None
 		selected = normalize_masters(masters)
 		duplicate_policy = normalize_duplicate_policy(duplicate_names)
 		batch_size = configured_batch_size(self.config)
@@ -386,8 +397,12 @@ class MasterSyncService:
 					}
 				] + batches
 			batches, unit_aliases = apply_unit_name_mapping(batches)
-			books_from = self._books_from()
-			clamped = clamp_mailing_details(batches, books_from)
+			has_mailing_details = any(
+				row.get("ledmailingdetails")
+				for batch in batches if batch.get("key") in ("customers", "suppliers")
+				for row in batch.get("tallymessage") or ()
+			)
+			clamped = clamp_mailing_details(batches, self._books_from()) if has_mailing_details else 0
 			if clamped:
 				trace.write(
 					"mailing_details_clamped",
@@ -557,7 +572,7 @@ class MasterSyncService:
 		totals = {"created": 0, "altered": 0, "ignored": 0, "errors": 0}
 		for row in chunk:
 			result = self._import_chunk([row], "ledger")
-			if not result.success and row.get("language name"):
+			if retryable_batch_rejection(result) and row.get("language name"):
 				# Tally refuses some ledgers because of the alias list. The
 				# ledger itself is valid, so retry without the alias instead
 				# of losing the party entirely.
@@ -571,7 +586,7 @@ class MasterSyncService:
 					result = retry
 			if result.success:
 				totals["created"] += result.created
-				totals["altered"] += result.altered
+				totals["altered"] += result.altered + result.combined
 				totals["ignored"] += result.ignored
 			else:
 				totals["errors"] += 1
@@ -590,12 +605,12 @@ class MasterSyncService:
 			result = self._import_chunk([row], "items")
 			if result.success:
 				totals["created"] += result.created
-				totals["altered"] += result.altered
+				totals["altered"] += result.altered + result.combined
 				totals["ignored"] += result.ignored
 				continue
 			original = message_name(row)
 			recovered = False
-			for suffix in ITEM_RENAME_SUFFIXES:
+			for suffix in ITEM_RENAME_SUFFIXES if retryable_batch_rejection(result) else ():
 				candidate = copy.deepcopy(row)
 				renamed = original + suffix
 				candidate["name"] = renamed
@@ -607,7 +622,7 @@ class MasterSyncService:
 				if retry.success:
 					self._item_alias_updates[original] = renamed
 					totals["created"] += retry.created
-					totals["altered"] += retry.altered
+					totals["altered"] += retry.altered + retry.combined
 					totals["ignored"] += retry.ignored
 					recovered = True
 					break
@@ -667,24 +682,20 @@ class MasterSyncService:
 						group["name"] = [renamed, f"ERPNext:Item:{original}"]
 
 	def _books_from(self):
-		"""Return the Tally company's books-start date as yyyymmdd."""
-		try:
-			request = build_collection_export(
-				self.config.tally_company,
-				"ETCompanyBooksFrom",
-				"Company",
-				("Name", "StartingFrom"),
-			)
-			records = parse_collection_export(
-				self.tally.export_collection(request), ("COMPANY",), raise_on_error=False
-			)
-			for record in records:
-				value = str(record.get("startingfrom") or "").strip()
-				if value:
-					return value.replace("-", "")[:8]
-		except Exception as exc:
-			LOGGER.warning("Could not read the Tally books start date: %s", exc)
-		return "20000401"
+		"""Return the configured Tally company's books-start date as yyyymmdd."""
+		request = build_collection_export(
+			self.config.tally_company, "ETCompanyBooksFrom", "Company", ("Name", "StartingFrom"),
+		)
+		records = parse_collection_export(self.tally.export_collection(request), ("COMPANY",))
+		matching = [
+			row for row in records
+			if master_name(row).casefold() == self.config.tally_company.casefold()
+		]
+		if len(matching) == 1:
+			value = tally_xml_date(str(matching[0].get("startingfrom") or "").strip())
+			if value:
+				return value
+		raise BridgeRequestError("Tally did not return the configured company's books start date")
 
 	def _erpnext_rows(self, doctype, fields, limit=5000):
 		return (
@@ -733,19 +744,17 @@ class MasterSyncService:
 
 	def _apply_party_groups(self, batches):
 		"""Place each party under its ERPNext group when Tally has that group."""
-		if not hasattr(self, "_tally_group_names"):
-			names = set()
-			try:
-				request = build_collection_export(
-					self.config.tally_company, "ETGroupNames", "Group", ("Name",)
-				)
-				rows = parse_collection_export(
-					self.tally.export_collection(request), ("GROUP",), raise_on_error=False
-				)
-				names = {master_name(row) for row in rows if master_name(row)}
-			except Exception as exc:
-				LOGGER.warning("Could not read Tally groups: %s", exc)
-			self._tally_group_names = names
+		if not any(
+			batch.get("key") in ("customers", "suppliers") and batch.get("tallymessage")
+			for batch in batches
+		):
+			return 0
+		if getattr(self, "_tally_group_names", None) is None:
+			request = build_collection_export(
+				self.config.tally_company, "ETGroupNames", "Group", ("Name",)
+			)
+			rows = parse_collection_export(self.tally.export_collection(request), ("GROUP",))
+			self._tally_group_names = {master_name(row) for row in rows if master_name(row)}
 		groups = self._tally_group_names
 		if not groups:
 			return 0
@@ -967,6 +976,10 @@ class MasterSyncService:
 			try:
 				if existing_names is not None:
 					self._apply_actions(chunk, existing_names)
+				if parts["key"] == "account_ledgers":
+					for row in chunk:
+						if row.get("metadata", {}).get("action") == "alter":
+							row.pop("affectsstock", None)
 				while self._request_size(chunk) > MAX_MASTER_REQUEST_BYTES and len(chunk) > 1:
 					chunk = chunk[:max(1, len(chunk) // 2)]
 				request_bytes = self._request_size(chunk)
@@ -1029,12 +1042,8 @@ class MasterSyncService:
 				errors += len(chunk)
 				LOGGER.warning("Master batch %s failed: %s", parts["key"], exc)
 				break
-			created += imported.created
-			altered += imported.altered
-			ignored += imported.ignored
-			errors += imported.errors
 			if (
-				not imported.success
+				retryable_batch_rejection(imported)
 				and len(chunk) > 1
 				and parts["key"] in LEDGER_BATCH_KEYS
 			):
@@ -1054,7 +1063,7 @@ class MasterSyncService:
 						names=rejected_ledgers[:200],
 					)
 				continue
-			if not imported.success and parts["key"] == "items" and len(chunk) > 1:
+			if retryable_batch_rejection(imported) and parts["key"] == "items" and len(chunk) > 1:
 				# Tally rejects an item it cannot read without naming it, which
 				# used to stop the whole run. Retry one at a time so the items
 				# Tally accepts still land.
@@ -1071,6 +1080,10 @@ class MasterSyncService:
 						names=rejected_items[:200],
 					)
 				continue
+			created += imported.created
+			altered += imported.altered + imported.combined
+			ignored += imported.ignored
+			errors += imported.errors
 			if not imported.success:
 				status = "Failed"
 				message = imported.message or f"{parts['label']} was rejected by Tally"
@@ -1080,17 +1093,21 @@ class MasterSyncService:
 				existing_names.update(message_name(row) for row in chunk)
 
 		if rejected_names and status == "Success":
+			status = "Failed"
+			errors += len(rejected_names)
 			message = (
 				f"Skipped {len(rejected_names)} unit(s) whose names TallyPrime cannot "
 				f"accept ({rejected_names[0][1]}). First: "
 				+ ", ".join(name for name, _ in rejected_names[:5])
 			)[:4000]
 		if rejected_items and status == "Success":
+			status = "Failed"
 			message = (
 				f"{len(rejected_items)} item(s) were rejected by Tally and skipped. "
 				"First: " + ", ".join(rejected_items[:5])
 			)[:4000]
 		if rejected_ledgers and status == "Success":
+			status = "Failed"
 			message = (
 				f"{len(rejected_ledgers)} ledger(s) were rejected by Tally and skipped. "
 				"First: " + ", ".join(rejected_ledgers[:5])
@@ -1131,22 +1148,19 @@ class MasterSyncService:
 
 	def _import_chunk(self, chunk, batch_key=""):
 		if batch_key == "units":
-			# TallyPrime's JSON importer raises an exception for Unit masters
-			# and can open a modal that blocks its HTTP server. The XML master
-			# import is reliable for units, so keep them on that path.
+			# TallyPrime's JSON importer can open a modal when importing units.
 			from .xml_gateway import build_unit_import
 
-			return self.tally.import_xml(
-				build_unit_import(self.config.tally_company, chunk),
-				require_change=False,
-				allow_ignored=True,
+			result = self.tally.import_xml(build_unit_import(self.config.tally_company, chunk))
+		else:
+			result = self.tally.import_json(self._request(chunk), "All Masters")
+		applied = result.created + result.altered + result.combined
+		if result.success and (applied != len(chunk) or result.ignored):
+			return replace(
+				result, success=False,
+				message=f"Tally confirmed {applied} of {len(chunk)} master writes (ignored={result.ignored})",
 			)
-		return self.tally.import_json(
-			self._request(chunk),
-			"All Masters",
-			require_change=False,
-			allow_ignored=True,
-		)
+		return result
 
 	def _safe_summary(self):
 		try:

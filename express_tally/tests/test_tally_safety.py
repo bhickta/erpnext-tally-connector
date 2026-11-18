@@ -152,3 +152,19 @@ class TestMasterWorkLimits(TestCase):
 		self.assertTrue(failed)
 		self.assertIn("Company unavailable", results[0]["message"])
 		service.tally.import_json.assert_not_called()
+
+
+	def test_partial_master_write_is_reported_and_not_replayed(self):
+		service = self.service()
+		service._existing_names = Mock(return_value=set())
+		service.tally.import_json.side_effect = None
+		service.tally.import_json.return_value = ImportResult(success=True, created=1, ignored=1)
+		results, failed, _ = service._run_batches([
+			{"key": "item_groups", "tallymessage": [{"name": "A"}, {"name": "B"}]},
+			{"key": "items", "tallymessage": [{"name": "Child"}]},
+		], 10, None)
+
+		self.assertTrue(failed)
+		self.assertEqual([result["status"] for result in results], ["Failed", "Skipped"])
+		self.assertIn("confirmed 1 of 2", results[0]["message"])
+		service.tally.import_json.assert_called_once()
