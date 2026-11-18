@@ -476,6 +476,37 @@ def build_voucher_import(order, company, target_id):
 	_element(voucher, "ISORDER", "No")
 	_element(voucher, "ISOPTIONAL", "No")
 
+	# Tally expects the stock lines before the ledger lines; when they are
+	# appended afterwards the block is imported empty.
+	for item in order["items"]:
+		item_amount = Decimal(str(item["amount"] or 0))
+		inventory = _element(voucher, "ALLINVENTORYENTRIES.LIST")
+		_element(inventory, "STOCKITEMNAME", item.get("tally_name") or item["item_code"])
+		_element(inventory, "ISDEEMEDPOSITIVE", _yes_no(item_amount < 0))
+		_element(inventory, "RATE", f"{_amount(item['rate'])}/{item['stock_uom']}")
+		_element(inventory, "AMOUNT", _amount(item_amount))
+		qty = _quantity(item["stock_qty"], item["stock_uom"])
+		_element(inventory, "ACTUALQTY", qty)
+		_element(inventory, "BILLEDQTY", qty)
+		if item.get("warehouse"):
+			batch = _element(inventory, "BATCHALLOCATIONS.LIST")
+			_element(batch, "GODOWNNAME", item["warehouse"])
+			_element(batch, "BATCHNAME", "Primary Batch")
+			_element(batch, "DESTINATIONGODOWNNAME", item["warehouse"])
+			_element(batch, "AMOUNT", _amount(item_amount))
+			_element(batch, "ACTUALQTY", qty)
+			_element(batch, "BILLEDQTY", qty)
+
+		# Item Invoice mode posts each stock line through its own accounting
+		# allocation; without this Tally stores the line but drops it.
+		allocation = _element(inventory, "ACCOUNTINGALLOCATIONS.LIST")
+		_element(allocation, "LEDGERNAME", order["sales_ledger"])
+		_element(allocation, "ISDEEMEDPOSITIVE", "No")
+		_element(allocation, "LEDGERFROMITEM", "No")
+		_element(allocation, "REMOVEZEROENTRIES", "No")
+		_element(allocation, "ISPARTYLEDGER", "No")
+		_element(allocation, "AMOUNT", _amount(item_amount))
+
 	grand_total = Decimal(str(order["grand_total"] or 0))
 	party_entry = _element(voucher, "LEDGERENTRIES.LIST")
 	_element(party_entry, "LEDGERNAME", order["customer"]["name"])
@@ -500,25 +531,6 @@ def build_voucher_import(order, company, target_id):
 	if net_total:
 		_element(sales_entry, "AMOUNT", _amount(net_total))
 
-	for item in order["items"]:
-		item_amount = Decimal(str(item["amount"] or 0))
-		inventory = _element(voucher, "ALLINVENTORYENTRIES.LIST")
-		_element(inventory, "STOCKITEMNAME", item.get("tally_name") or item["item_code"])
-		_element(inventory, "ISDEEMEDPOSITIVE", _yes_no(item_amount < 0))
-		_element(inventory, "RATE", f"{_amount(item['rate'])}/{item['stock_uom']}")
-		_element(inventory, "AMOUNT", _amount(item_amount))
-		qty = _quantity(item["stock_qty"], item["stock_uom"])
-		_element(inventory, "ACTUALQTY", qty)
-		_element(inventory, "BILLEDQTY", qty)
-
-		if item.get("warehouse"):
-			batch = _element(inventory, "BATCHALLOCATIONS.LIST")
-			_element(batch, "GODOWNNAME", item["warehouse"])
-			_element(batch, "BATCHNAME", "Primary Batch")
-			_element(batch, "DESTINATIONGODOWNNAME", item["warehouse"])
-			_element(batch, "AMOUNT", _amount(item_amount))
-			_element(batch, "ACTUALQTY", qty)
-			_element(batch, "BILLEDQTY", qty)
 
 	for tax in order["taxes"]:
 		tax_amount = Decimal(str(tax["amount"] or 0))
