@@ -501,7 +501,7 @@ def build_voucher_import(order, company, target_id):
 
 	for item in order["items"]:
 		item_amount = Decimal(str(item["amount"] or 0))
-		inventory = _element(sales_entry, "INVENTORYALLOCATIONS.LIST")
+		inventory = _element(voucher, "INVENTORYENTRIES.LIST")
 		_element(inventory, "STOCKITEMNAME", item.get("tally_name") or item["item_code"])
 		_element(inventory, "ISDEEMEDPOSITIVE", _yes_no(item_amount < 0))
 		if item_amount:
