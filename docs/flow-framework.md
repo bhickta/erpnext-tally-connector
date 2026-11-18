@@ -99,6 +99,35 @@ references, ledgers, parties, lines, taxes, or eligibility differ. Override
 own pending-version selection, sync logging, payload hashing, agent transport,
 master ordering, and Tally import/response handling.
 
+The sales-document flow keeps its existing voucher types and IDs. It uses the
+accounting voucher layout for non-invoice sales documents and the item invoice
+layout for sales invoices. For vouchers with stock lines, enable **Inventory
+values are affected** on the configured Tally sales ledger. The bridge enables
+this when it creates the ledger and asks the operator to review the setting on
+existing ledgers. [Tally XML samples](https://help.tallysolutions.com/sample-xml/)
+show both voucher layouts.
+
+The bridge looks up each stock voucher through an inline Tally collection and
+checks the stored item names, quantities and godowns before acknowledging it.
+If a write is accepted and readback fails, the rest of the batch stays pending.
+A retry checks the existing voucher and source version before creating any
+masters or sending another voucher. Reconcile older or incomplete vouchers in
+Tally before retrying them.
+
+On the Tally computer, the bridge can inspect a previously imported voucher
+using its configured Tally endpoint and company. Use the number shown in Tally,
+since Tally may assign a different number at import.
+
+```text
+python -m express_tally.bridge --config tally-bridge.json inspect-voucher --number DN-FULL --date 2026-07-01
+```
+
+The command returns the voucher's master ID and stored stock lines. If more
+than one voucher matches, add `--voucher-type` with the type shown in Tally.
+This command uses collection export and works independently of the named
+report exports. If the collection request itself fails, the command reports
+the error.
+
 ## Context
 
 Every operation receives a `FlowContext` containing:

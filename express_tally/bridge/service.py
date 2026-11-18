@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from .clients import BridgeRequestError
 from .preview import summarize_records
 from .profiles import AgentProfileRegistry
+from .voucher_readback import VoucherReadbackError
 from .xml_gateway import current_company_request
 
 LOGGER = logging.getLogger("erpnext_tally_bridge")
@@ -149,8 +150,8 @@ class SyncService:
 
 		documents = batch.get("documents") or batch.get("orders") or []
 		summary.fetched = len(documents)
-		for document in documents:
-			result = self._sync_document(document, profile)
+		for index, document in enumerate(documents):
+			result, stop_batch = self._sync_document(document, profile)
 			try:
 				self.frappe.acknowledge(self.config, [result], flow=flow)
 			except BridgeRequestError as exc:
@@ -158,11 +159,13 @@ class SyncService:
 				LOGGER.error("Could not acknowledge %s: %s", document["name"], exc)
 				summary.failed += 1
 				summary.error = str(exc)
-				continue
-			if result["status"] == "Success":
-				summary.succeeded += 1
 			else:
-				summary.failed += 1
+				summary.succeeded += result["status"] == "Success"
+				summary.failed += result["status"] != "Success"
+			if stop_batch:
+				summary.error = result["error"] if not summary.error else f"{result['error']}; {summary.error}"
+				summary.skipped += len(documents) - index - 1
+				break
 		return summary
 
 	def _sync_inbound(self, flow, agent_profile, limit=None, default_options=None):
@@ -216,12 +219,14 @@ class SyncService:
 			"tally_voucher_id": "",
 			"error": "",
 		}
+		stop_batch = False
 		try:
 			target_reference = profile.deliver(document, self.config, self.tally)
 			result["status"] = "Success"
 			result["target_reference"] = target_reference
 			result["tally_voucher_id"] = target_reference
 		except Exception as exc:
+			stop_batch = isinstance(exc, VoucherReadbackError)
 			result["error"] = str(exc)[:4000]
 			LOGGER.error("Sync failed for %s: %s", document.get("name"), exc)
-		return result
+		return result, stop_batch

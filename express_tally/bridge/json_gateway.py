@@ -4,6 +4,8 @@ import uuid
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 
+from .xml_gateway import stock_item_name
+
 
 def _amount(value):
 	return str(Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
@@ -67,13 +69,13 @@ def _godown(name):
 	}
 
 
-def _ledger(name, parent, billwise=False, gstin="", country=""):
+def _ledger(name, parent, billwise=False, gstin="", country="", *, affects_stock=False):
 	ledger = {
 		"metadata": _metadata("Ledger", name),
 		"name": name,
 		"parent": parent,
 		"isbillwiseon": bool(billwise),
-		"affectsstock": False,
+		"affectsstock": affects_stock,
 	}
 	if country:
 		ledger["countryofresidence"] = country
@@ -83,7 +85,7 @@ def _ledger(name, parent, billwise=False, gstin="", country=""):
 
 
 def _stock_item(item):
-	tally_name = item.get("tally_name") or item.get("item_name") or item["item_code"]
+	tally_name = stock_item_name(item)
 	names = [{"metadata": True, "type": "String"}, tally_name]
 	for alias in (item["item_code"], f"ERPNext:Item:{item['item_code']}"):
 		if alias and alias.casefold() != tally_name.casefold() and alias not in names:
@@ -102,7 +104,7 @@ def _stock_item(item):
 	return stock_item
 
 
-def build_master_imports(document, company):
+def build_master_imports(document, company, *, sales_ledger_exists=False):
 	"""Return dependency-ordered native JSONEx master requests."""
 	units = [_unit(name) for name in document["masters"]["units"]]
 	general = [_stock_group(group) for group in document["masters"]["item_groups"]]
@@ -117,7 +119,10 @@ def build_master_imports(document, company):
 			country=customer.get("country") or "",
 		)
 	)
-	general.append(_ledger(document["sales_ledger"], "Sales Accounts"))
+	if not sales_ledger_exists:
+		general.append(
+			_ledger(document["sales_ledger"], "Sales Accounts", affects_stock=bool(document["items"]))
+		)
 	general.extend(_ledger(tax["ledger"], "Duties & Taxes") for tax in document["taxes"])
 	if document.get("rounding_adjustment"):
 		general.append(_ledger(document["round_off_ledger"], "Indirect Expenses"))
@@ -216,7 +221,7 @@ def build_voucher_import(document, company, target_id):
 			batch["godownname"] = item["warehouse"]
 		voucher["allinventoryentries"].append(
 			{
-				"stockitemname": item.get("tally_name") or item.get("item_name") or item["item_code"],
+				"stockitemname": stock_item_name(item),
 				"isdeemedpositive": False,
 				"rate": f"{_amount(item['rate'])}/{item['stock_uom']}",
 				"amount": _amount(item["amount"]),

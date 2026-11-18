@@ -2,6 +2,7 @@
 
 import importlib
 import inspect
+import json
 from copy import deepcopy
 
 from .clients import BridgeRequestError
@@ -15,7 +16,14 @@ from .payment_gateway import (
 	validate_accounting_voucher,
 	validate_payment,
 )
-from .xml_gateway import build_voucher_import, function_request, voucher_remote_id
+from .voucher_readback import VoucherReadbackError, read_collection, read_voucher, verify_voucher
+from .xml_gateway import (
+	build_unit_import,
+	build_voucher_import,
+	function_request,
+	unit_name_error,
+	voucher_remote_id,
+)
 
 
 class AgentProfile:
@@ -66,19 +74,25 @@ class InventorySalesVoucherProfile(AgentProfile):
 			date_note = f"ERPNext {source_type} {document['name']}; original date {original_date}"
 			document["narration"] = "\n".join(part for part in (document.get("narration"), date_note) if part)
 
-		master_payloads = (
-			()
-			if document.get("operation") == "Cancel"
-			else build_master_imports(document, config.tally_company)
-		)
-		for master_payload in master_payloads:
-			master_result = tally_client.import_json(
-				master_payload,
-				"All Masters",
-				require_change=False,
-			)
-			if not master_result.success:
-				raise BridgeRequestError(master_result.message or "Tally master import failed")
+		operation = document["operation"]
+		verify_stock = operation != "Cancel" and bool(document["items"])
+		guid = f"guid:{voucher_remote_id(document, config.target_id)}"
+		reference = str(document.get("tally_voucher_id") or guid)
+		if verify_stock:
+			version_marker = f"[ExpressTallyVersion:{document['source_hash']}]"
+			narration = document.get("narration") or f"ERPNext {document.get('source_doctype', 'Sales Order')} {document['name']}"
+			document["narration"] = f"{narration}\n{version_marker}"
+			try:
+				existing = read_voucher(tally_client, config.tally_company, reference)
+				if operation == "Create" and existing:
+					return verify_voucher(existing, document, version_marker)
+				if operation == "Alter" and not existing:
+					raise BridgeRequestError(f"Tally voucher {reference} could not be found for alteration")
+			except BridgeRequestError as exc:
+				raise VoucherReadbackError(f"Cannot verify Tally inventory vouchers before import: {exc}") from exc
+
+		if operation != "Cancel":
+			self.prepare_masters(document, config.tally_company, tally_client)
 
 		voucher_result = tally_client.import_xml(
 			build_voucher_import(document, config.tally_company, config.target_id),
@@ -87,7 +101,67 @@ class InventorySalesVoucherProfile(AgentProfile):
 		)
 		if not voucher_result.success:
 			raise BridgeRequestError(voucher_result.message or "Tally voucher import failed")
-		return voucher_result.last_voucher_id or f"guid:{voucher_remote_id(document, config.target_id)}"
+		if verify_stock:
+			try:
+				row = read_voucher(tally_client, config.tally_company, reference)
+				return verify_voucher(row, document, version_marker)
+			except BridgeRequestError as exc:
+				raise VoucherReadbackError(
+					f"Tally accepted the import for {document['name']}, but stock verification failed: {exc}"
+				) from exc
+		return voucher_result.last_voucher_id or reference
+
+	@staticmethod
+	def prepare_masters(document, company, tally):
+		def sales_ledger():
+			name = document["sales_ledger"]
+			request = build_collection_export(
+				company, "ETOutboundSalesLedger", "Ledger", ("Name", "AffectsStock"),
+				[f"$Name = {json.dumps(name)}"],
+			)
+			rows = read_collection(tally, request, "LEDGER")
+			if len(rows) > 1 or (rows and scalar(rows[0], "name", "_name").casefold() != name.casefold()):
+				raise BridgeRequestError(f"Tally returned an ambiguous sales ledger for {name}")
+			if rows and scalar(rows[0], "affectsstock").casefold() not in {"yes", "true", "1"}:
+				raise BridgeRequestError(
+					f"Enable Inventory values are affected on the Tally sales ledger '{name}' "
+					"before syncing stock vouchers"
+				)
+			return bool(rows)
+
+		has_stock = bool(document["items"])
+		has_sales_ledger = has_stock and sales_ledger()
+		units, *other_masters = build_master_imports(
+			document, company, sales_ledger_exists=has_sales_ledger
+		)
+		unit_masters = units["tallymessage"]
+		if unit_masters:
+			names = [row["name"] for row in unit_masters]
+			request = build_collection_export(
+				company, "ETOutboundUnits", "Unit", ("Name",),
+				[" OR ".join(f"($Name = {json.dumps(name)})" for name in names)],
+			)
+			existing = {
+				scalar(row, "name", "_name").casefold()
+				for row in read_collection(tally, request, "UNIT")
+			}
+			missing = [row for row in unit_masters if row["name"].casefold() not in existing]
+			if missing:
+				for row in missing:
+					if error := unit_name_error(row["name"]):
+						raise BridgeRequestError(f"Cannot create Tally unit '{row['name']}': {error}")
+				result = tally.import_xml(build_unit_import(company, missing))
+				if not result.success:
+					raise BridgeRequestError(result.message or "Tally unit import failed")
+
+		for index, payload in enumerate(other_masters):
+			if not payload["tallymessage"]:
+				continue
+			result = tally.import_json(payload, "All Masters", require_change=False)
+			if not result.success:
+				raise BridgeRequestError(result.message or "Tally master import failed")
+			if index == 0 and has_stock and not has_sales_ledger and not sales_ledger():
+				raise BridgeRequestError(f"Tally did not create the sales ledger '{document['sales_ledger']}'")
 
 
 class PaymentVoucherProfile(AgentProfile):
