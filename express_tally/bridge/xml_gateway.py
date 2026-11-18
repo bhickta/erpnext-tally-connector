@@ -470,7 +470,7 @@ def build_voucher_import(order, company, target_id):
 		"NARRATION",
 		narration,
 	)
-	_element(voucher, "PERSISTEDVIEW", "Accounting Voucher View")
+	_element(voucher, "PERSISTEDVIEW", "Invoice Voucher View")
 	_element(voucher, "ISINVOICE", _yes_no(order.get("is_invoice")))
 	_element(voucher, "ISORDER", "No")
 	_element(voucher, "ISOPTIONAL", "No")
