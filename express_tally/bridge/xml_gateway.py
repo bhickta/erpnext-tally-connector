@@ -360,15 +360,49 @@ def _voucher_attributes(order, target_id):
 def build_stock_journal_import(order, company, target_id):
 	"""Build a Tally Stock Journal for one ERPNext Stock Entry.
 
-	Deliberately unimplemented: a Stock Journal carries godown movements, and
-	posting a wrong quantity or godown corrupts stock in Tally. This needs a
-	live validation pass (blank company, one Material Issue / Receipt /
-	Transfer) before it is allowed to write anything.
+	Each item contributes a source leg (issue) and a target leg (receipt) when
+	both godowns are known, which covers Material Transfer. Material Issue and
+	Material Receipt supply only one side. Amounts are signed so Tally sees the
+	issue as negative and the receipt as positive.
 	"""
-	raise NotImplementedError(
-		"Stock Journal import is not validated yet; do not enable Stock Entry "
-		"pushes until it has been tested against a live Tally company"
-	)
+	root, message = _import_envelope("Vouchers", company)
+	attributes, remote_id = _voucher_attributes(order, target_id)
+	voucher = _element(message, "VOUCHER", **attributes)
+	_element(voucher, "GUID", remote_id)
+	_element(voucher, "DATE", _date(order["transaction_date"]))
+	_element(voucher, "VOUCHERTYPENAME", "Stock Journal")
+	_element(voucher, "VOUCHERNUMBER", order.get("source_name") or "")
+	_element(voucher, "REFERENCE", order.get("source_name") or "")
+	_element(voucher, "NARRATION", order.get("narration") or "")
+	_element(voucher, "PERSISTEDVIEW", "Invoice Voucher View")
+	_element(voucher, "ISOPTIONAL", "No")
+
+	for item in order.get("items") or ():
+		quantity = Decimal(str(item.get("quantity") or 0))
+		rate = Decimal(str(item.get("rate") or 0))
+		amount = Decimal(str(item.get("amount") or 0))
+		unit = str(item.get("uom") or "").strip()
+		quantity_text = f"{quantity} {unit}".strip()
+		for godown, outgoing in (
+			(item.get("source_godown"), True),
+			(item.get("target_godown"), False),
+		):
+			if not godown:
+				continue
+			signed = -amount if outgoing else amount
+			entry = _element(voucher, "INVENTORYENTRIES.LIST")
+			_element(entry, "STOCKITEMNAME", item.get("item") or "")
+			_element(entry, "ISDEEMEDPOSITIVE", _yes_no(outgoing))
+			_element(entry, "ACTUALQTY", quantity_text)
+			_element(entry, "BILLEDQTY", quantity_text)
+			_element(entry, "RATE", _amount(rate))
+			_element(entry, "AMOUNT", _amount(signed))
+			batch = _element(entry, "BATCHALLOCATIONS.LIST")
+			_element(batch, "GODOWNNAME", godown)
+			_element(batch, "ACTUALQTY", quantity_text)
+			_element(batch, "BILLEDQTY", quantity_text)
+			_element(batch, "AMOUNT", _amount(signed))
+	return ET.tostring(root, encoding="unicode")
 
 
 def build_voucher_import(order, company, target_id):
