@@ -505,9 +505,8 @@ def build_voucher_import(order, company, target_id):
 		inventory = _element(voucher, "ALLINVENTORYENTRIES.LIST")
 		_element(inventory, "STOCKITEMNAME", item.get("tally_name") or item["item_code"])
 		_element(inventory, "ISDEEMEDPOSITIVE", _yes_no(item_amount < 0))
-		if item_amount:
-			_element(inventory, "RATE", f"{_amount(item['rate'])}/{item['stock_uom']}")
-			_element(inventory, "AMOUNT", _amount(item_amount))
+		_element(inventory, "RATE", f"{_amount(item['rate'])}/{item['stock_uom']}")
+		_element(inventory, "AMOUNT", _amount(item_amount))
 		qty = _quantity(item["stock_qty"], item["stock_uom"])
 		_element(inventory, "ACTUALQTY", qty)
 		_element(inventory, "BILLEDQTY", qty)
@@ -516,8 +515,8 @@ def build_voucher_import(order, company, target_id):
 			batch = _element(inventory, "BATCHALLOCATIONS.LIST")
 			_element(batch, "GODOWNNAME", item["warehouse"])
 			_element(batch, "BATCHNAME", "Primary Batch")
-			if item_amount:
-				_element(batch, "AMOUNT", _amount(item_amount))
+			_element(batch, "DESTINATIONGODOWNNAME", item["warehouse"])
+			_element(batch, "AMOUNT", _amount(item_amount))
 			_element(batch, "ACTUALQTY", qty)
 			_element(batch, "BILLEDQTY", qty)
 
