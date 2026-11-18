@@ -557,6 +557,18 @@ class MasterSyncService:
 		totals = {"created": 0, "altered": 0, "ignored": 0, "errors": 0}
 		for row in chunk:
 			result = self._import_chunk([row], "ledger")
+			if not result.success and row.get("language name"):
+				# Tally refuses some ledgers because of the alias list. The
+				# ledger itself is valid, so retry without the alias instead
+				# of losing the party entirely.
+				fallback = copy.deepcopy(row)
+				fallback.pop("language name", None)
+				retry = self._import_chunk([fallback], "ledger")
+				if retry.success:
+					self._trace_write(
+						"ledger_alias_dropped", name=message_name(row)
+					)
+					result = retry
 			if result.success:
 				totals["created"] += result.created
 				totals["altered"] += result.altered
