@@ -48,8 +48,10 @@ def stock_entry_document(document):
 			}
 		)
 	return {
+		"name": document["name"],
 		"source_doctype": document["doctype"],
 		"source_name": document["name"],
+		"voucher_type": "Stock Journal",
 		"transaction_date": _voucher_date(document.get("posting_date")),
 		"narration": f"ERPNext {document['doctype']} {document['name']}",
 		"items": rows,
