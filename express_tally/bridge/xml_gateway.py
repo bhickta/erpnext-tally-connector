@@ -1,4 +1,4 @@
-import hashlib
+﻿import hashlib
 import re
 import uuid
 import xml.etree.ElementTree as ET
@@ -370,6 +370,7 @@ def build_stock_journal_import(order, company, target_id):
 	voucher = _element(message, "VOUCHER", **attributes)
 	_element(voucher, "GUID", remote_id)
 	_element(voucher, "DATE", _date(order["transaction_date"]))
+	_element(voucher, "EFFECTIVEDATE", _date(order["transaction_date"]))
 	_element(voucher, "VOUCHERTYPENAME", "Stock Journal")
 	_element(voucher, "VOUCHERNUMBER", order.get("source_name") or "")
 	_element(voucher, "REFERENCE", order.get("source_name") or "")
@@ -402,6 +403,49 @@ def build_stock_journal_import(order, company, target_id):
 			_element(batch, "ACTUALQTY", quantity_text)
 			_element(batch, "BILLEDQTY", quantity_text)
 			_element(batch, "AMOUNT", _amount(signed))
+	return ET.tostring(root, encoding="unicode")
+
+
+def build_delivery_note_import(order, company, target_id):
+	"""Build a stock-only Tally Delivery Note for an ERPNext Delivery Note.
+
+	Tally treats a Delivery Note as an inventory voucher, so it carries no
+	ledger entries. That also makes it valid for zero-value deliveries, which a
+	Sales voucher cannot be: Tally rejects a zero-amount accounting voucher.
+	"""
+	root, message = _import_envelope("Vouchers", company)
+	attributes, remote_id = _voucher_attributes(order, target_id)
+	attributes["VCHTYPE"] = "Delivery Note"
+	voucher = _element(message, "VOUCHER", **attributes)
+	_element(voucher, "GUID", remote_id)
+	_element(voucher, "DATE", _date(order["transaction_date"]))
+	_element(voucher, "VOUCHERTYPENAME", "Delivery Note")
+	_element(voucher, "VOUCHERNUMBER", order["name"])
+	_element(voucher, "REFERENCE", order.get("reference") or order["name"])
+	_element(
+		voucher,
+		"NARRATION",
+		order.get("narration")
+		or f"ERPNext {order.get('source_doctype', 'Delivery Note')} {order['name']}",
+	)
+	_element(voucher, "PERSISTEDVIEW", "Invoice Voucher View")
+	_element(voucher, "ISOPTIONAL", "No")
+
+	for item in order["items"]:
+		amount = Decimal(str(item.get("amount") or 0))
+		quantity = _quantity(item["stock_qty"], item["stock_uom"])
+		entry = _element(voucher, "INVENTORYENTRIES.LIST")
+		_element(entry, "STOCKITEMNAME", item["item_code"])
+		_element(entry, "ISDEEMEDPOSITIVE", "No")
+		_element(entry, "ACTUALQTY", quantity)
+		_element(entry, "BILLEDQTY", quantity)
+		_element(entry, "RATE", f"{_amount(item.get('rate'))}/{item['stock_uom']}")
+		_element(entry, "AMOUNT", _amount(amount))
+		batch = _element(entry, "BATCHALLOCATIONS.LIST")
+		_element(batch, "GODOWNNAME", item.get("warehouse") or "")
+		_element(batch, "ACTUALQTY", quantity)
+		_element(batch, "BILLEDQTY", quantity)
+		_element(batch, "AMOUNT", _amount(amount))
 	return ET.tostring(root, encoding="unicode")
 
 
@@ -458,7 +502,7 @@ def build_voucher_import(order, company, target_id):
 	for item in order["items"]:
 		item_amount = Decimal(str(item["amount"] or 0))
 		inventory = _element(sales_entry, "INVENTORYALLOCATIONS.LIST")
-		_element(inventory, "STOCKITEMNAME", item["item_code"])
+		_element(inventory, "STOCKITEMNAME", item.get("tally_name") or item["item_code"])
 		_element(inventory, "ISDEEMEDPOSITIVE", _yes_no(item_amount < 0))
 		if item_amount:
 			_element(inventory, "RATE", f"{_amount(item['rate'])}/{item['stock_uom']}")
