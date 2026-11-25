@@ -116,7 +116,7 @@ def read_accounting_voucher(tally, company, document, target_id):
 		return read_voucher(tally, company, str(reference), fields=ACCOUNTING_FIELDS)
 	marker = f"[ExpressTallySource:{voucher_remote_id(document, target_id)}]"
 	rows = read_vouchers(tally, company, [f'$Narration Contains "{marker}"'], fields=ACCOUNTING_FIELDS)
-	if len(rows) > 1 or (rows and marker not in scalar(rows[0], "narration").splitlines()):
+	if len(rows) > 1 or (rows and marker not in scalar(rows[0], "narration")):
 		raise ValueError("Tally returned an ambiguous accounting voucher identity")
 	return rows[0] if rows else None
 

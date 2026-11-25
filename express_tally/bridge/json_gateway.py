@@ -96,7 +96,9 @@ def _stock_item(item):
 		"parent": item.get("item_group") or "\x04 Primary",
 		"base units": item["stock_uom"],
 		"gsttypeofsupply": "Goods",
-		"partno": item["item_code"],
+		# The ERPNext item code is kept in the aliases below. TallyPrime
+		# rejects partno on an existing Stock Item and on codes containing
+		# spaces, so it is not sent here.
 		"language name": [{"name": names, "language id": " 1033"}],
 	}
 	if item.get("hsn_code"):

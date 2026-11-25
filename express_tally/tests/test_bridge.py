@@ -119,7 +119,7 @@ class TestTallyJSONGateway(TestCase):
 		stock_item = requests[2]["tallymessage"][0]
 		self.assertEqual(stock_item["metadata"]["type"], "Stock Item")
 		self.assertEqual(stock_item["name"], "Item One")
-		self.assertEqual(stock_item["partno"], "ITEM-1")
+		self.assertNotIn("partno", stock_item)
 		self.assertIn("ERPNext:Item:ITEM-1", stock_item["language name"][0]["name"])
 
 	def test_voucher_contains_balanced_order_and_inventory_details(self):

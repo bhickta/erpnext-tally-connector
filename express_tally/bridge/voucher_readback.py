@@ -209,7 +209,7 @@ def verify_voucher(row, document, version_marker, *, check_inventory=True):
 		raise BridgeRequestError(
 			f"Tally voucher {master_id} for {name} did not retain the expected stock items, quantities and godowns"
 		)
-	if version_marker not in scalar(row, "narration").splitlines():
+	if version_marker not in scalar(row, "narration"):
 		raise BridgeRequestError(
 			f"Tally voucher {master_id} for {name} has no matching ERPNext version marker. "
 			"Reconcile the existing voucher before retrying."

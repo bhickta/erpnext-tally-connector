@@ -453,7 +453,10 @@ def build_delivery_note_import(order, company, target_id):
 
 
 def stock_item_name(item):
-	return item.get("tally_name") or item.get("item_name") or item["item_code"]
+	# Tally collapses repeated spaces in master names. Match that so a payload
+	# like "FC 4" 23/30 PC  - Proend" resolves to the existing Tally item.
+	name = item.get("tally_name") or item.get("item_name") or item["item_code"]
+	return re.sub(r"\s+", " ", str(name)).strip()
 
 
 def _sales_inventory_entry(parent, tag, item, sales_ledger=None):

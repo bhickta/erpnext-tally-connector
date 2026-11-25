@@ -88,10 +88,13 @@ class InventorySalesVoucherProfile(AgentProfile):
 		guid = f"guid:{voucher_remote_id(document, config.target_id)}"
 		reference = str(document.get("tally_voucher_id") or guid)
 
-		def read_saved():
+		def read_saved(saved_reference=None):
+			saved_reference = saved_reference or reference
 			if operation == "Cancel":
-				return read_voucher(tally_client, config.tally_company, reference, fields=IDENTITY_FIELDS)
-			return read_voucher(tally_client, config.tally_company, reference)
+				return read_voucher(
+					tally_client, config.tally_company, saved_reference, fields=IDENTITY_FIELDS
+				)
+			return read_voucher(tally_client, config.tally_company, saved_reference)
 
 		if operation != "Cancel":
 			version_marker = f"[ExpressTallyVersion:{document['source_hash']}]"
@@ -122,7 +125,10 @@ class InventorySalesVoucherProfile(AgentProfile):
 		if not voucher_result.success:
 			raise BridgeRequestError(voucher_result.message or "Tally voucher import failed")
 		try:
-			row = read_saved()
+			# Tally may replace an imported GUID with its own company-prefixed
+			# identity. Prefer the master ID Tally just returned, so a successful
+			# write is verified instead of being treated as missing.
+			row = read_saved(voucher_result.last_voucher_id)
 			if operation == "Cancel":
 				return verify_cancelled_voucher(row, document)
 			return verify_voucher(row, document, version_marker)
