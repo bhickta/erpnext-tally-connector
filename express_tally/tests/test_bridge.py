@@ -199,13 +199,20 @@ class TestTallyXMLVoucherGateway(TestCase):
 		self.assertEqual(dn_voucher.findtext("VOUCHERTYPENAME"), "Sales")
 		self.assertEqual(so_voucher.findtext("ISORDER"), "No")
 		self.assertEqual(dn_voucher.findtext("ISORDER"), "No")
-		self.assertEqual(so_voucher.findtext("PERSISTEDVIEW"), "Accounting Voucher View")
-		self.assertEqual(dn_voucher.attrib["OBJVIEW"], "Accounting Voucher View")
-		self.assertEqual(dn_voucher.findtext("OBJVIEW"), "Accounting Voucher View")
-		self.assertIsNone(dn_voucher.find("ALLINVENTORYENTRIES.LIST"))
+		self.assertEqual(so_voucher.findtext("PERSISTEDVIEW"), "Invoice Voucher View")
+		self.assertEqual(dn_voucher.attrib["OBJVIEW"], "Invoice Voucher View")
+		self.assertEqual(dn_voucher.findtext("OBJVIEW"), "Invoice Voucher View")
+		self.assertEqual(dn_voucher.findtext("VCHENTRYMODE"), "Item Invoice")
+		self.assertIsNone(dn_voucher.find("LEDGERENTRIES.LIST/INVENTORYALLOCATIONS.LIST"))
 		self.assertEqual(
-			dn_voucher.findtext("LEDGERENTRIES.LIST[LEDGERNAME='Sales']/INVENTORYALLOCATIONS.LIST/STOCKITEMNAME"),
+			dn_voucher.findtext("ALLINVENTORYENTRIES.LIST/STOCKITEMNAME"),
 			"Item One",
+		)
+		self.assertEqual(
+			dn_voucher.findtext(
+				"ALLINVENTORYENTRIES.LIST/ACCOUNTINGALLOCATIONS.LIST/LEDGERNAME"
+			),
+			"Sales",
 		)
 		self.assertEqual(dn_voucher.findtext("ISINVOICE"), "No")
 		self.assertNotEqual(so_voucher.attrib["REMOTEID"], dn_voucher.attrib["REMOTEID"])
@@ -218,14 +225,14 @@ class TestTallyXMLVoucherGateway(TestCase):
 		root = ET.fromstring(build_xml_voucher_import(order, "Test Company", "target-1"))
 		voucher = root.find(".//VOUCHER")
 		entries = voucher.findall("LEDGERENTRIES.LIST")
-		inventory = entries[1].find("INVENTORYALLOCATIONS.LIST")
+		inventory = voucher.find("ALLINVENTORYENTRIES.LIST")
 
 		self.assertEqual(entries[0].findtext("LEDGERNAME"), "Customer One")
 		self.assertIsNone(entries[0].find("AMOUNT"))
-		self.assertEqual(entries[1].findtext("LEDGERNAME"), "Sales")
-		self.assertIsNone(entries[1].find("AMOUNT"))
+		self.assertEqual(voucher.findtext("PERSISTEDVIEW"), "Invoice Voucher View")
 		self.assertIsNone(inventory.find("RATE"))
 		self.assertIsNone(inventory.find("AMOUNT"))
+		self.assertIsNone(inventory.find("ACCOUNTINGALLOCATIONS.LIST"))
 		self.assertEqual(inventory.findtext("ACTUALQTY"), "2 Nos")
 
 	def test_credit_note_uses_return_signs_and_origin_marker(self):

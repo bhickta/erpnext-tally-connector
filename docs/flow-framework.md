@@ -99,12 +99,14 @@ references, ledgers, parties, lines, taxes, or eligibility differ. Override
 own pending-version selection, sync logging, payload hashing, agent transport,
 master ordering, and Tally import/response handling.
 
-The sales-document flow keeps its existing voucher types and IDs. It uses the
-accounting voucher layout for non-invoice sales documents and the item invoice
-layout for sales invoices. For vouchers with stock lines, enable **Inventory
-values are affected** on the configured Tally sales ledger. The bridge enables
-this when it creates the ledger and asks the operator to review the setting on
-existing ledgers. [Tally XML samples](https://help.tallysolutions.com/sample-xml/)
+The sales-document flow keeps its existing voucher types and IDs. Any voucher
+with stock lines uses the item invoice layout, including Sales Orders and
+Delivery Notes; the accounting layout is used only when there are no stock lines.
+Tally accepts an accounting-view import but stores its inventory block empty, so
+stock lines would not appear in the posted voucher. For vouchers with stock
+lines, enable **Inventory values are affected** on the configured Tally sales
+ledger. The bridge enables this when it creates the ledger and asks the operator
+to review the setting on existing ledgers. [Tally XML samples](https://help.tallysolutions.com/sample-xml/)
 show both voucher layouts.
 
 The bridge looks up each stock voucher through an inline Tally collection and

@@ -497,7 +497,12 @@ def build_voucher_import(order, company, target_id):
 	root, message = _import_envelope("Vouchers", company)
 	attributes, remote_id = _voucher_attributes(order, target_id)
 	is_invoice = bool(order.get("is_invoice"))
-	view = "Invoice Voucher View" if is_invoice else "Accounting Voucher View"
+	items = order["items"]
+	# Tally stores stock lines only when the voucher uses the item-invoice view.
+	# The accounting view accepts the import but drops the inventory block, which
+	# is why Delivery Notes posted without items. Use it for every stock voucher.
+	item_invoice = bool(items)
+	view = "Invoice Voucher View" if item_invoice or is_invoice else "Accounting Voucher View"
 	attributes["OBJVIEW"] = view
 	voucher = _element(message, "VOUCHER", **attributes)
 	_element(voucher, "GUID", remote_id)
@@ -517,7 +522,7 @@ def build_voucher_import(order, company, target_id):
 	_element(voucher, "NARRATION", narration)
 	_element(voucher, "PERSISTEDVIEW", view)
 	_element(voucher, "OBJVIEW", view)
-	if is_invoice:
+	if item_invoice or is_invoice:
 		_element(voucher, "VCHENTRYMODE", "Item Invoice")
 	_element(voucher, "ISINVOICE", _yes_no(is_invoice))
 	_element(voucher, "ISORDER", "No")
@@ -533,11 +538,10 @@ def build_voucher_import(order, company, target_id):
 		_element(bill, "BILLTYPE", "New Ref")
 		_element(bill, "AMOUNT", _amount(party_amount))
 
-	items = order["items"]
 	sales_ledger = order["sales_ledger"]
-	# Invoice view derives the sales posting from the per-item allocations.
-	# Accounting view puts the same inventory under the sales ledger instead.
-	if not is_invoice or not items:
+	# Item-invoice vouchers derive the sales posting from each stock line's
+	# accounting allocation, so they must not also carry a Sales ledger entry.
+	if not item_invoice:
 		net_total = Decimal(
 			str(order.get("net_total") or sum(Decimal(str(item["amount"] or 0)) for item in items))
 		)
@@ -556,9 +560,13 @@ def build_voucher_import(order, company, target_id):
 			Decimal(str(order["rounding_adjustment"])),
 		)
 
-	if is_invoice:
+	if item_invoice:
 		for item in items:
-			_sales_inventory_entry(voucher, "ALLINVENTORYENTRIES.LIST", item, sales_ledger)
+			# Zero-value lines keep quantities but omit zero allocations.
+			allocation_ledger = sales_ledger if Decimal(str(item["amount"] or 0)) else None
+			_sales_inventory_entry(
+				voucher, "ALLINVENTORYENTRIES.LIST", item, allocation_ledger
+			)
 	return ET.tostring(root, encoding="unicode")
 
 
