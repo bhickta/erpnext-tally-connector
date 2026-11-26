@@ -429,6 +429,33 @@ class TestMasterSyncService(TestCase):
 			self.assertEqual(report_id, "All Masters")
 			self.assertEqual(payload["static_variables"][1]["value"], "Tally Company")
 
+	def test_mailing_details_are_clamped_to_company_books_start(self):
+		batches = [
+			{
+				"key": "customers",
+				"label": "Customers",
+				"tallymessage": [
+					{
+						"metadata": {"type": "Ledger", "action": "create", "name": "CUST-1"},
+						"name": "CUST-1",
+						"ledmailingdetails": [
+							{"applicablefrom": "20261126", "address": ["Street"]}
+						],
+					}
+				],
+			}
+		]
+		service = MasterSyncService(self.config(), FakeFrappe(batches), FakeTally())
+
+		with patch.object(service, "_books_from", return_value="20260401"):
+			result = service.sync(["Customer"])
+
+		self.assertTrue(result["ok"])
+		self.assertEqual(
+			batches[0]["tallymessage"][0]["ledmailingdetails"][0]["applicablefrom"],
+			"20260401",
+		)
+
 	def test_existing_tally_unit_is_skipped_instead_of_altered(self):
 		batches = [
 			{

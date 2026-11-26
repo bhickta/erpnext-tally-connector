@@ -402,13 +402,17 @@ class MasterSyncService:
 				for batch in batches if batch.get("key") in ("customers", "suppliers")
 				for row in batch.get("tallymessage") or ()
 			)
-			clamped = clamp_mailing_details(batches, self._books_from()) if has_mailing_details else 0
-			if clamped:
-				trace.write(
-					"mailing_details_clamped",
-					count=clamped,
-					books_from=books_from,
-				)
+			if has_mailing_details:
+				books_from = self._books_from()
+				clamped = clamp_mailing_details(batches, books_from)
+				if clamped:
+					trace.write(
+						"mailing_details_clamped",
+						count=clamped,
+						books_from=books_from,
+					)
+			else:
+				clamped = 0
 			batches, dropped_item_values = sanitize_item_messages(batches)
 			party_groups_applied = self._apply_party_groups(batches)
 			if party_groups_applied:
